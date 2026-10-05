@@ -36,7 +36,7 @@ Checks performed: `name`, `description`, `version`, `platforms`,
 
 - Headings are ordered and not skipped.
 - Code fences are balanced and language-tagged.
-- Internal links (`[text](relative/path.md)`) resolve to a file that exists.
+- Relative link targets resolve to a file that exists in the repository.
 - Tables render (consistent pipe counts per row).
 
 ### 3. Secrets and personal data
