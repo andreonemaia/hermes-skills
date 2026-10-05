@@ -1,0 +1,30 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# Hermes local state
+.hermes/
+
+# Secrets and environment
+.env
+.env.*
+*.key
+*.pem
+*.p12
+
+# Local scratch / review artifacts
+review.jsonl
+*.review.jsonl
+scratch/
+
+# Python (helper scripts some skills may ship)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node (helper tooling)
+node_modules/
