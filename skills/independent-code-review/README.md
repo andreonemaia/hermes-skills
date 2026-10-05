@@ -178,6 +178,12 @@ Diff source: `git diff --stat main...HEAD` plus `git diff main...HEAD`.
   session pickers, but `hermes sessions list` still shows them, and
   `hermes -c` can continue the last one. The skill never deletes sessions to
   work around this.
+- **The diff is persisted in two places.** The diff travels inside the brief, so
+  it is written to the Hermes session store (see the bullet above) and to
+  `<scratch-dir>/review.jsonl`. If the diff may contain secrets, treat both as
+  sensitive: clean the scratch directory after the review, and decide explicitly
+  whether the session should be removed (`hermes sessions delete <id> --yes`).
+  Nothing is deleted automatically.
 - **Read-only means read-only.** The reviewer cannot fetch extra context itself;
   everything it needs must be in the brief.
 - **No GitHub-side action.** The skill does not post review comments or approve

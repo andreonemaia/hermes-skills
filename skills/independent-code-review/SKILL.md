@@ -62,6 +62,7 @@ git diff <A>..<B>              # explicit range
 
 # 3. Run the isolated reviewer (one-shot, no toolsets: -t none, never -t "")
 #    pass --reasoning only if auxiliary.review.reasoning_effort is configured
+mkdir -p "<scratch-dir>"
 hermes chat --query-file <brief.md> \
   -m <model> --provider <provider> --reasoning <level> \
   -t none --ignore-rules -Q --max-turns 2 \
@@ -123,6 +124,12 @@ storage-hidden. `hermes sessions list` still shows one-shot sessions, and
 Hermes version cannot hide an auxiliary run, record that limitation here instead
 of deleting the user's history.
 
+**Sensitive diffs are persisted twice.** The brief carries the diff, so a review
+of sensitive code writes that diff into two places: the Hermes session store (see
+above) and `<scratch-dir>/review.jsonl`. Treat both as sensitive artifacts, clean
+the scratch directory after the review, and let the user decide explicitly
+whether to delete the session. Never delete sessions automatically.
+
 ## Procedure
 
 ### Step 1 - Discover the reviewer
@@ -160,6 +167,7 @@ the truncation instead of reviewing a partial diff silently.
 ### Step 3 - Run the isolated reviewer
 
 ```bash
+mkdir -p "<scratch-dir>"
 hermes chat --query-file <brief> \
   -m <model> --provider <provider> --reasoning <level> \
   -t none --ignore-rules -Q --max-turns 2 \
