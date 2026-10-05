@@ -15,9 +15,11 @@ earlier mistakes) is still there and anchors the reviewer.
 This skill fixes it by making the reviewer a genuinely separate run:
 
 - a **separate `hermes chat` process**,
-- a **separate model** (the one configured at `auxiliary.review`),
+- a **separate model** (the one configured at `auxiliary.review`; if that key is
+  not configured, the skill stops and asks rather than pretending to have a
+  reviewer),
 - a **clean context** (`--ignore-rules`, no shared conversation),
-- **zero tools** (`-t none`), so it can only read the diff you hand it,
+- **zero tools** (`-t none`), so it can only reason about the diff you hand it,
 - a **finite, one-shot run** (`--oneshot --source oneshot`), hidden from the
   Desktop/TUI session pickers.
 
@@ -35,9 +37,9 @@ cannot touch the repository.
                    │    gh pr diff / git diff
                    ▼
         ┌──────────────────────────────┐
-        │ separate hermes chat process │   3. brief + diff on stdin
-        │  -t none  --ignore-rules     │      no tools, no shared context
-        │  --oneshot --source oneshot  │
+        │ separate hermes chat process │   3. brief file (--query-file)
+        │  -t none  --ignore-rules     │      diff embedded, no tools
+        │  --oneshot --source oneshot  │      no shared context
         └──────────┬───────────────────┘
                    │ 4. stream-json: init event -> actual model
                    │    review text + graded findings
@@ -59,7 +61,10 @@ The whole value is in the isolation. Three barriers:
    and the diff.
 3. **Capability isolation** - `-t none` loads no tools at all, so the reviewer
    cannot read the rest of the repo, cannot run commands, and cannot write
-   anything. It analyses the diff, nothing else.
+   anything. It analyses the diff delivered inside the brief, nothing else. This
+   is an absence of capability in the reviewer process, not a kernel-level
+   sandbox: the guarantee rests on the CLI honouring `-t none` (re-validate it on
+   a CLI upgrade).
 
 Anything the reviewer needs beyond the diff (requirements, acceptance criteria,
 architecture) is added to the brief on purpose, by the author, explicitly.

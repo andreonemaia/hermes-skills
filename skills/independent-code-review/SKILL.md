@@ -9,7 +9,6 @@ metadata:
   hermes:
     tags: [code-review, git, github, multi-model, reviewer, quality]
     category: software-development
-    related_skills: [github-code-review, requesting-code-review]
 ---
 
 # Independent Code Review
@@ -33,9 +32,11 @@ context hides.
 
 Don't use for:
 
-- Self-review by the implementer (use `requesting-code-review`).
-- Posting review comments to GitHub (only with explicit user authorization;
-  prefer `github-code-review` for that).
+- Self-review by the implementer. That is the author's own check, not an
+  independent review; keep the two steps separate.
+- Posting review comments to GitHub, approving or merging. This skill never
+  writes to GitHub; do that only with explicit user authorization and a
+  dedicated tool.
 - Fixing the findings. This skill reports; the caller decides.
 
 ## Prerequisites
@@ -65,9 +66,13 @@ hermes chat --query-file <brief.md> \
   --in <scratch-dir> --format stream-json --source oneshot > review.jsonl
 ```
 
-Windows (PowerShell): the same command works. Use `Get-Content` / `Set-Content`
-for files instead of POSIX-only heredocs or shell redirection helpers, and quote
-paths with forward slashes.
+Shells: the blocks in this skill are written for a POSIX shell (bash, git-bash
+on Windows). PowerShell is **not** drop-in compatible with them: it does not
+continue lines with `\` (it uses a backtick), it has no `grep`/`wc` (use
+`Select-String` and `Measure-Object`), and its redirection re-encodes output. Run
+these commands through bash/git-bash, or translate each block before using it in
+PowerShell. Windows is this skill's only tested platform, and git-bash is the
+tested shell.
 
 ## Auxiliary runs are internal implementation
 
@@ -80,9 +85,11 @@ up in the user's normal conversation list.
 2. **Always an explicit hidden source:** `--source oneshot`. An explicit
    `--source` always wins over the transport default, so a run started from
    inside a Desktop/TUI session is still tagged as a one-shot run, not as that
-   conversation. `--source tool` is the documented tag for third-party
-   integrations and is equally hidden; `oneshot` is the accurate tag for
-   first-party auxiliary runs.
+   conversation. Do **not** substitute `--source tool`: it is documented as
+   hidden, but on the validated version it still leaked into the Desktop Project
+   tree, while `oneshot` did not (see **Visibility evidence**). `oneshot` is both
+   the accurate tag for first-party auxiliary runs and the one observed to be
+   filtered.
 3. **No interactive auxiliary sessions** for probes, reviewer tests, model
    confirmation or toolset validation. All of them use the same one-shot form.
 4. **Never delete sessions.** Prevention via the hidden source is the mechanism;
@@ -123,7 +130,13 @@ of deleting the user's history.
 3. Completion criterion: you hold an explicit provider + model string, OR you
    have established that `auxiliary.review` is **not** configured.
 4. If it is **not** configured: do NOT fake an independent reviewer. State the
-   absence plainly and ask whether to use another model explicitly.
+   absence plainly and ask whether to use another model explicitly (the flow
+   stops there until the user answers).
+5. Compare the configured reviewer `model` with the model **you** are currently
+   running on. A separate process and a clean context still hold when the two
+   models are the same, but the "second opinion" is weaker: record the outcome
+   as `distinct from implementer model: yes/no` in the report (Step 9) instead
+   of implying model independence you did not have.
 
 Never silently reuse the main agent as if it were an independent reviewer.
 
@@ -147,12 +160,14 @@ the truncation instead of reviewing a partial diff silently.
 hermes chat --query-file <brief> \
   -m <model> --provider <provider> --reasoning <level> \
   -t none --ignore-rules -Q --max-turns 2 \
-  --in <scratch-dir> --format stream-json --source oneshot
+  --in <scratch-dir> --format stream-json --source oneshot > review.jsonl
 ```
 
-- `<model>` and `<provider>` come from Step 1. A provider identifier such as
-  `custom` is accepted for user-defined providers; the full display name also
-  works.
+- `<model>` and `<provider>` come from Step 1. Provider identifiers (`custom`,
+  `openai`, `anthropic`, ...) and full display names are both accepted.
+- `--reasoning <level>` comes from `auxiliary.review.reasoning_effort` when that
+  key is present. If it is absent, omit `--reasoning` entirely and let the CLI
+  default apply; never invent a level.
 - `-t none` yields **zero tools** (verified with `-v`: "No tools loaded"). Do
   NOT use `-t ""`: an empty value falls back to the default toolsets and the
   reviewer runs with full tools. `-t none` prints a cosmetic
@@ -160,13 +175,18 @@ hermes chat --query-file <brief> \
   re-validate on a CLI change.
 - `--ignore-rules` skips injection of memory, `AGENTS.md`/`SOUL.md` and preloaded
   skills, so the reviewer sees only the brief.
-- `--in <scratch-dir>` scopes the working directory, so a misbehaving reviewer
-  cannot write into the user's repositories.
-- `--max-turns 2` bounds tool iterations (irrelevant with no tools, harmless).
+- `--in <scratch-dir>` scopes the reviewer's working directory. This is **defense
+  in depth**, not a sandbox: the real write barrier is `-t none`, which leaves the
+  process with no tool able to write anywhere.
+- `--max-turns 2` keeps the run finite even if tools were ever re-enabled; with
+  zero tools it is inert.
 - `-Q` (or `--oneshot`) makes the run finite and non-interactive; combined with
   `--source oneshot` it is tagged as an internal auxiliary run, hidden from the
   Desktop/TUI/dashboard pickers (see **Auxiliary runs are internal
   implementation**).
+- Redirect the stream to `review.jsonl` in the scratch directory, as shown: Step
+  4 parses that file, and writing it outside the user's repositories keeps the
+  review artifacts out of their working tree.
 - Pass the diff inside the brief; never share the implementer's conversation.
 
 ### Step 4 - Confirm the model that actually ran
@@ -179,7 +199,12 @@ Parse the stream for the init event:
   do NOT claim the configured reviewer was used.
 - The init event exposes the **model only**, not the provider. State the provider
   from config, never from the stream.
-- Sanity check: `grep -c '"tool_use"' review.jsonl` must be `0`.
+- `<actual>` == your own model -> process/context isolation still holds, but
+  report `distinct from implementer model: no` (Step 1.5). Never present a
+  same-model run as model-independent.
+- Sanity check: `grep -c '"tool_use"' review.jsonl` must be `0`. Note that
+  `grep -c` exits `1` when the count is `0`, which is the expected result here;
+  read the number, not the exit status (use `|| true` in scripts under `set -e`).
 
 ### Step 5 - Read-only enforcement
 
@@ -195,6 +220,11 @@ Brief = only useful context: objective, known requirements/acceptance criteria,
 files changed, the full diff, available test results, necessary architecture
 context. Do not dump the whole conversation.
 
+The reviewer runs with `--ignore-rules` in a clean process, so it cannot infer
+anything you do not write down: fill `<language>` in the template with the
+language the final report should be written in, and spell out every requirement
+the diff is supposed to satisfy.
+
 Ask the reviewer to look for: logic bugs; regressions; requirement violations;
 typing problems; security issues (when applicable); concurrency/state issues
 (when applicable); edge cases; error handling; missing or insufficient tests;
@@ -204,7 +234,7 @@ out-of-scope changes.
 Brief template (the outer fence is four backticks so the inner one survives):
 
 ````markdown
-You are an independent, rigorous code reviewer. Respond in the user's language.
+You are an independent, rigorous code reviewer. Respond in: <language>.
 Do NOT modify files. Do NOT use tools. Output the review text only.
 
 ## Context
@@ -257,6 +287,7 @@ Emit the report in the user's language, using this structure:
 - reasoning:
 - independent run confirmed: yes/no
 - fallback detected: yes/no
+- distinct from implementer model: yes/no
 
 ### Reviewed scope
 - diff source:
@@ -301,8 +332,10 @@ approved | approved with observations | changes recommended | changes required b
 - **Deleting sessions to tidy up.** Never. `--source oneshot` keeps the row out of
   the user's pickers; deleting history is not this skill's job even if a run
   somehow shows up.
-- **Assuming Bash on Windows**: this skill declares Windows support only. Show
-  the PowerShell equivalent for anything shell-specific.
+- **Choosing the right shell**: this skill declares Windows support only, and its
+  command blocks are POSIX-shell syntax (bash / git-bash). PowerShell is not
+  drop-in compatible; translate line continuations, `grep`/`wc` and redirection
+  before using a block there, or run it through git-bash.
 - **Treating version-validated behaviour as a guarantee.** The `-t none` and
   `--source oneshot` findings were validated on one Hermes version. Re-validate
   after a CLI upgrade instead of assuming.
@@ -317,5 +350,6 @@ approved | approved with observations | changes recommended | changes required b
 - [ ] `-t none` used; `grep -c '"tool_use"' review.jsonl` == 0.
 - [ ] Auxiliary run was one-shot (`-Q`/`--oneshot`) with `--source oneshot`; no interactive auxiliary session and no session deleted.
 - [ ] Init event model matches the configured model; fallback checked and reported.
+- [ ] Report states whether the reviewer model differs from the implementer's.
 - [ ] No file/Git/GitHub write occurred; `git status` unchanged after the review.
 - [ ] Findings validated and classified; report emitted in the user's language.
