@@ -1,6 +1,6 @@
 ---
 name: independent-code-review
-description: "Independent read-only code review by a separate model."
+description: "Independent read-only code review by a separate reviewer process."
 version: 1.0.0
 author: Hermes Skills contributors
 license: MIT
@@ -13,11 +13,12 @@ metadata:
 
 # Independent Code Review
 
-Run a code review with a **separate reviewer model**, in an isolated `hermes
-chat` process, strictly read-only. The reviewer is normally the model configured
-at `auxiliary.review` in the Hermes config. This skill covers GitHub PRs, local
-branch diffs, staged changes, and uncommitted changes. It never publishes to
-GitHub and never edits code on its own.
+Run a code review with a **separate reviewer process** in an isolated `hermes
+chat` run, strictly read-only. The reviewer is normally the model configured at
+`auxiliary.review` in the Hermes config; the run's `system/init` event is checked
+so a silent fallback to another model is reported instead of assumed away. This
+skill covers GitHub PRs, local branch diffs, staged changes, and uncommitted
+changes. It never publishes to GitHub and never edits code on its own.
 
 **Core principle:** an agent must not review its own work in its own context. A
 fresh process, a separate model, and zero tools find what the implementer's
@@ -60,10 +61,12 @@ git diff                       # unstaged
 git diff <A>..<B>              # explicit range
 
 # 3. Run the isolated reviewer (one-shot, no toolsets: -t none, never -t "")
+#    pass --reasoning only if auxiliary.review.reasoning_effort is configured
 hermes chat --query-file <brief.md> \
   -m <model> --provider <provider> --reasoning <level> \
   -t none --ignore-rules -Q --max-turns 2 \
-  --in <scratch-dir> --format stream-json --source oneshot > review.jsonl
+  --in <scratch-dir> --format stream-json --source oneshot \
+  > "<scratch-dir>/review.jsonl"
 ```
 
 Shells: the blocks in this skill are written for a POSIX shell (bash, git-bash
@@ -160,7 +163,8 @@ the truncation instead of reviewing a partial diff silently.
 hermes chat --query-file <brief> \
   -m <model> --provider <provider> --reasoning <level> \
   -t none --ignore-rules -Q --max-turns 2 \
-  --in <scratch-dir> --format stream-json --source oneshot > review.jsonl
+  --in <scratch-dir> --format stream-json --source oneshot \
+  > "<scratch-dir>/review.jsonl"
 ```
 
 - `<model>` and `<provider>` come from Step 1. Provider identifiers (`custom`,
@@ -184,9 +188,11 @@ hermes chat --query-file <brief> \
   `--source oneshot` it is tagged as an internal auxiliary run, hidden from the
   Desktop/TUI/dashboard pickers (see **Auxiliary runs are internal
   implementation**).
-- Redirect the stream to `review.jsonl` in the scratch directory, as shown: Step
-  4 parses that file, and writing it outside the user's repositories keeps the
-  review artifacts out of their working tree.
+- Redirect the stream to an absolute path inside the scratch directory, as
+  shown: Step 4 parses that file, and writing it outside the user's repositories
+  keeps the review artifacts out of their working tree. The invoking shell does
+  the redirect, not `--in`, so a bare `review.jsonl` would land in the agent's
+  current directory, usually the repository under review.
 - Pass the diff inside the brief; never share the implementer's conversation.
 
 ### Step 4 - Confirm the model that actually ran
@@ -202,9 +208,12 @@ Parse the stream for the init event:
 - `<actual>` == your own model -> process/context isolation still holds, but
   report `distinct from implementer model: no` (Step 1.5). Never present a
   same-model run as model-independent.
-- Sanity check: `grep -c '"tool_use"' review.jsonl` must be `0`. Note that
-  `grep -c` exits `1` when the count is `0`, which is the expected result here;
-  read the number, not the exit status (use `|| true` in scripts under `set -e`).
+- Sanity check: `grep -cE '"type": ?"tool_use"' "<scratch-dir>/review.jsonl"` must
+  be `0`. The pattern requires an unescaped `"type"` key, so the brief echoed
+  back into the stream, where the same text appears as `\"type\"`, cannot cause a
+  false positive. Note that `grep -c` exits `1` when the count is `0`, which is
+  the expected result here; read the number, not the exit status (use `|| true`
+  in scripts under `set -e`).
 
 ### Step 5 - Read-only enforcement
 
@@ -347,7 +356,7 @@ approved | approved with observations | changes recommended | changes required b
 - [ ] Reviewer provider/model read from `auxiliary.review` (or absence reported).
 - [ ] Diff acquired read-only; source stated.
 - [ ] Reviewer ran in a separate `hermes chat` process with explicit provider/model.
-- [ ] `-t none` used; `grep -c '"tool_use"' review.jsonl` == 0.
+- [ ] `-t none` used; tool-use count in the stream is `0`.
 - [ ] Auxiliary run was one-shot (`-Q`/`--oneshot`) with `--source oneshot`; no interactive auxiliary session and no session deleted.
 - [ ] Init event model matches the configured model; fallback checked and reported.
 - [ ] Report states whether the reviewer model differs from the implementer's.

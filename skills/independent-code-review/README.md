@@ -1,8 +1,11 @@
 # independent-code-review
 
-Get a code review from a **different model than the one that wrote the code**,
-running in a separate process, with no tools and no access to the author's
-conversation.
+Get a code review from a **separate reviewer process** that has no tools and no
+access to the author's conversation, and that is configured to run a different
+model than the one that wrote the code. Whether that model really differed is
+stated in the report: when the configured reviewer runs the same model as the
+implementer, the skill reports a same-model second opinion instead of claiming
+model independence.
 
 ## The problem it solves
 
@@ -84,10 +87,10 @@ Acquisition is strictly read-only: no `add`, `commit`, `checkout`, `stash` or
 
 ### Read-only mode
 
-The reviewer is read-only by construction (no tools), and the run is scoped with
-`--in <scratch-dir>` so even a misbehaving process cannot write into the user's
-repositories. After the run, the author verifies that `git status --short` is
-unchanged.
+The reviewer is read-only by construction: `-t none` leaves it with no tool that
+could write anywhere. The run is additionally scoped with `--in <scratch-dir>`
+and `--ignore-rules` as **defense in depth, not a sandbox**. After the run, the
+author verifies that `git status --short` is unchanged.
 
 ### Confirming the model that actually ran
 
