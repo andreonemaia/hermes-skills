@@ -317,7 +317,10 @@ class SafeChildPathTests(TempDirMixin, unittest.TestCase):
         self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
         link = os.path.join(self.tmp, "escape")
         try:
-            os.symlink(outside, link)
+            # ``target_is_directory`` is ignored on POSIX, but Windows needs it
+            # to link a directory: without it the call raises OSError even when
+            # the host allows symlinks, and this regression test would skip.
+            os.symlink(outside, link, target_is_directory=True)
         except (OSError, NotImplementedError, AttributeError):
             self.skipTest("symlink creation not permitted on this platform")
         with self.assertRaises(_common.ComfyModelManagerError):
@@ -1224,6 +1227,11 @@ class UiValidationTests(unittest.TestCase):
         )
 
     def test_link_slot_in_range_is_accepted(self):
+        # Local ``object_info``: the range check is only reachable when the
+        # origin declares at least one output, so a shared fixture that stopped
+        # declaring one would make this pass for the wrong reason.
+        object_info = {"EmptyLatentImage": {"output": ["LATENT"]}, "KSampler": {"output": ["LATENT"]}}
+        self.assertTrue(object_info["EmptyLatentImage"]["output"])
         workflow = {
             "nodes": [
                 {"id": 1, "type": "EmptyLatentImage", "widgets_values": [512, 512, 1]},
@@ -1231,7 +1239,7 @@ class UiValidationTests(unittest.TestCase):
             ],
             "links": [[1, 1, 0, 2, 0, "LATENT"]],
         }
-        report = comfy_validate.validate_ui_workflow(workflow, OBJECT_INFO)
+        report = comfy_validate.validate_ui_workflow(workflow, object_info)
         self.assertEqual(report.as_dict()["error_count"], 0)
 
     def test_link_invalid_slot_values_are_errors(self):
@@ -1239,6 +1247,11 @@ class UiValidationTests(unittest.TestCase):
         # check. ``True`` matters most: ``bool`` is a subclass of ``int``, so
         # without the explicit ``isinstance(..., bool)`` test it would be read
         # as slot 1 and pass for a node that only produces one output.
+        # Local ``object_info`` for the same reason as above: these slots are
+        # rejected before the range check, but the fixture must still declare
+        # an output or the guard would be bypassed by the empty-output branch.
+        object_info = {"EmptyLatentImage": {"output": ["LATENT"]}, "KSampler": {"output": ["LATENT"]}}
+        self.assertTrue(object_info["EmptyLatentImage"]["output"])
         for origin_slot in (-1, True, "0", None):
             with self.subTest(origin_slot=origin_slot):
                 workflow = {
@@ -1248,7 +1261,7 @@ class UiValidationTests(unittest.TestCase):
                     ],
                     "links": [[1, 1, origin_slot, 2, 0, "LATENT"]],
                 }
-                report = comfy_validate.validate_ui_workflow(workflow, OBJECT_INFO)
+                report = comfy_validate.validate_ui_workflow(workflow, object_info)
                 messages = [issue["message"] for issue in report.as_dict()["errors"]]
                 self.assertTrue(
                     any("invalid output slot" in message for message in messages),
@@ -1259,6 +1272,14 @@ class UiValidationTests(unittest.TestCase):
         # A reroute/note node is not declared by ``/object_info`` and has no
         # output list, so its slot must not be range-checked: doing so would
         # report a load error for a graph ComfyUI accepts.
+        #
+        # ``object_info`` here declares an ``output`` list for ``Reroute`` on
+        # purpose. Without that entry the range check is already unreachable
+        # (the empty output list short-circuits it), so the test would pass
+        # even with the virtual-type guard removed. With it, only the guard
+        # keeps slot 5 from being reported, which is what this test asserts.
+        object_info = dict(OBJECT_INFO)
+        object_info["Reroute"] = {"output": ["LATENT"]}
         workflow = {
             "nodes": [
                 {"id": 1, "type": "Reroute"},
@@ -1266,7 +1287,7 @@ class UiValidationTests(unittest.TestCase):
             ],
             "links": [[1, 1, 5, 2, 0, "LATENT"]],
         }
-        report = comfy_validate.validate_ui_workflow(workflow, OBJECT_INFO)
+        report = comfy_validate.validate_ui_workflow(workflow, object_info)
         self.assertEqual(report.as_dict()["error_count"], 0)
 
 
