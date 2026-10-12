@@ -7,8 +7,14 @@ How to write, structure, and version a skill that fits this repository.
 ```
 skills/<skill-name>/
 ├── SKILL.md      # required
-└── README.md     # optional, human-facing
+├── README.md     # optional, human-facing
+├── scripts/      # optional, helpers the skill runs
+└── tests/        # optional, automated tests for scripts/
 ```
+
+If the skill ships scripts, the scripts go in `scripts/` and their tests go in
+`tests/`, using the standard library so a reader can run them without installing
+anything. See `docs/testing.md` for what those tests must satisfy.
 
 ### `SKILL.md` frontmatter
 

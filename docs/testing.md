@@ -73,6 +73,31 @@ The skill README explains the same behaviour as `SKILL.md`, without duplicating
 it wholesale. If the version or the commands differ between the two files, the
 skill is wrong.
 
+### 7. Automated tests
+
+A skill that ships scripts should ship tests for them, in the skill's own
+`tests/` directory, using the standard library (`unittest`) so that running them
+needs no dependency install:
+
+```bash
+cd skills/<skill-name>
+python -m unittest discover -s tests -t tests
+```
+
+Requirements:
+
+- **No network and no live service.** Anything that would reach out is stubbed
+  or skipped. A test that needs a running server is not a test, it is a manual
+  step, and it belongs in the skill's verification checklist instead.
+- **Hermetic against the host.** Tests must not read the machine's real
+  configuration, home directory, or installed applications. If the code under
+  test discovers paths, pin that discovery to a temporary directory in the test
+  setup. A suite that passes only because of the author's machine is not
+  evidence.
+- **Deterministic.** No sleeps, no clock dependence, no ordering assumptions.
+- **The suite runs green before the change is proposed.** Report the exact
+  command and the observed result in the pull request.
+
 ## Independent review
 
 A skill change must pass an independent review by a different model/context
