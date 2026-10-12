@@ -8,6 +8,15 @@ each skill is the `version` field in its own `SKILL.md`.
 
 ## [Unreleased]
 
+### Added
+
+- `comfyui-model-manager` skill (0.1.0): discover a ComfyUI installation,
+  inventory the model files on disk, verify a SHA-256 manifest against them,
+  and fetch only the missing or corrupted entries (dry run by default). Also
+  statically validates a workflow, in API or UI format, against a running
+  server's `/object_info`. Standard-library only; ships a `unittest` suite.
+  Complements the official `comfyui` skill. Tested on Windows.
+
 ## [1.0.0] - 2026-10-05
 
 ### Added
