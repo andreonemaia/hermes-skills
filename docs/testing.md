@@ -98,6 +98,25 @@ Requirements:
 - **The suite runs green before the change is proposed.** Report the exact
   command and the observed result in the pull request.
 
+### 8. Code-to-documentation consistency
+
+When the code emits identifiers that must be documented — finding IDs, exit
+codes, states, event types — add a test that asserts every emitted identifier is
+documented, with the same severity or meaning. The writing rule is in
+`docs/development.md`.
+
+- **Derive the identifiers from the code**, not from a second hand-written list,
+  so emitting one without documenting it fails the suite.
+- **Assert the scan found a non-empty set**, so a documentation reformat cannot
+  turn the test into a no-op that passes forever.
+- **Parse the structure you must read, not whole lines.** A line-shaped regex
+  both missed identifiers grouped into one table cell and matched unrelated
+  tables, failing on correct documentation. Read the table's cells instead.
+
+Reference implementation: the consistency test in the `task-checkpoint-recovery`
+skill's suite, which scans `scripts/` for emitted finding IDs and requires each
+one, with its real severity, in `references/schema.md` and `README.md`.
+
 ## Independent review
 
 A skill change must pass an independent review by a different model/context
