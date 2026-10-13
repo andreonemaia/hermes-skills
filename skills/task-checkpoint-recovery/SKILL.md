@@ -201,7 +201,9 @@ overwritten: it is quarantined only once a valid history snapshot exists to fall
 - [ ] `check-op` returns `proceed` (0) with no ledger entry, and "do not repeat" (1)
       after a verified `record-op`.
 - [ ] `resume-report` on a fresh clone of the state names the next action, not the whole task.
-- [ ] `python -m unittest discover -s tests -t tests` passes.
+- [ ] `cd <skill dir> && python -m unittest discover -s tests -t tests` passes. Run it from
+      the skill directory: from the repository root there is no `tests/` and discovery
+      aborts with `ImportError: Start directory is not importable`.
 - [ ] `python scripts/validate.py --project <root>` exits 0 for every checkpoint.
 
 ## Pitfalls
