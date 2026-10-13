@@ -7,6 +7,7 @@ the ``TCR_NOW`` clock override used by the test suite.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import os
@@ -101,13 +102,38 @@ class LockTimeout(CheckpointError):
 # time / ids
 # --------------------------------------------------------------------------
 
+def parse_timestamp(value: str) -> str:
+    """Return ``value`` unchanged when it is a usable timestamp, else raise.
+
+    Accepts ISO-8601 (offset optional) and bare epoch seconds: both shapes the
+    CLI advertises. Everything else is refused here, so an unusable ``--now``
+    or ``TCR_NOW`` never reaches the store as an unparseable timestamp.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("timestamp must be a non-empty ISO-8601 string")
+    text = value.strip()
+    try:
+        datetime.datetime.fromisoformat(text)
+        return value
+    except ValueError:
+        pass
+    try:
+        float(text)
+    except ValueError:
+        raise ValueError(
+            "invalid timestamp %r: expected ISO-8601 "
+            "(e.g. 2026-10-13T12:00:00-03:00)" % value
+        )
+    return value
+
+
 def now_iso(now: str | None = None) -> str:
     """ISO-8601 timestamp. ``TCR_NOW`` (or ``now``) keeps tests deterministic."""
     if now:
-        return now
+        return parse_timestamp(now)
     override = os.environ.get("TCR_NOW")
     if override:
-        return override
+        return parse_timestamp(override)
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
@@ -302,6 +328,10 @@ class FileLock:
         self.poll = poll
         self.stale_after = stale_after
         self._fd = None
+        #: Written into the lock file. ``release`` only unlinks the lock while
+        #: the file still carries this token, so a reclaimed or replaced lock is
+        #: never deleted out from under its new owner.
+        self._token = "pid=%d:%s" % (os.getpid(), os.urandom(8).hex())
 
     def acquire(self) -> "FileLock":
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
@@ -320,7 +350,7 @@ class FileLock:
                 continue
             except OSError as exc:  # pragma: no cover - platform specific
                 raise LockTimeout("cannot create lock %s: %s" % (self.path, exc))
-            os.write(fd, ("pid=%d\nat=%s\n" % (os.getpid(), now_iso())).encode("utf-8"))
+            os.write(fd, ("%s\nat=%s\n" % (self._token, now_iso())).encode("utf-8"))
             os.fsync(fd)
             self._fd = fd
             return self
@@ -339,11 +369,24 @@ class FileLock:
         return True
 
     def release(self) -> None:
-        if self._fd is not None:
+        held = self._fd is not None
+        if held:
             try:
                 os.close(self._fd)
             finally:
                 self._fd = None
+        if not held:
+            # Never acquired here (or already released): the file on disk
+            # belongs to another holder and must survive.
+            return
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as fh:
+                body = fh.read()
+        except OSError:
+            return
+        if self._token not in body:
+            # Another process reclaimed the lock and wrote its own token.
+            return
         try:
             os.unlink(self.path)
         except OSError:
@@ -467,6 +510,17 @@ def _check_keys(obj, allowed: set, where: str, errors: list[str]) -> None:
             _err(errors, "%s has unsupported field %r" % (where, key))
 
 
+def _list_field(data: dict, key: str, errors: list[str]) -> list:
+    """``data[key]`` as a list. A wrong shape is reported, never raised on."""
+    value = data.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        _err(errors, "%s must be a list" % key)
+        return []
+    return value
+
+
 def validate_checkpoint(data) -> list[str]:
     """Full schema validation. Returns a list of human-readable errors."""
     errors: list[str] = []
@@ -476,7 +530,7 @@ def validate_checkpoint(data) -> list[str]:
     if data.get("schema") != SCHEMA_ID:
         _err(errors, "unsupported schema %r (expected %r)" % (data.get("schema"), SCHEMA_ID))
     revision = data.get("revision")
-    if not isinstance(revision, int) or revision < 1:
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
         _err(errors, "revision must be a positive integer")
 
     task = data.get("task")
@@ -498,59 +552,79 @@ def validate_checkpoint(data) -> list[str]:
         if not isinstance(repo.get("available"), bool):
             _err(errors, "repo.available must be a boolean")
 
-    for index, step in enumerate(data.get("steps") or []):
+    for index, step in enumerate(_list_field(data, "steps", errors)):
         where = "$.steps[%d]" % index
         _check_keys(step, ALLOWED_STEP, where, errors)
+        if not isinstance(step, dict):
+            continue
         for field in ("id", "title"):
             if not isinstance(step.get(field), str) or not step.get(field):
                 _err(errors, "%s.%s must be a non-empty string" % (where, field))
         if step.get("status") not in STEP_STATUS:
             _err(errors, "%s.status must be one of %s" % (where, sorted(STEP_STATUS)))
 
-    for index, dec in enumerate(data.get("decisions") or []):
+    for index, dec in enumerate(_list_field(data, "decisions", errors)):
         where = "$.decisions[%d]" % index
         _check_keys(dec, ALLOWED_DECISION, where, errors)
+        if not isinstance(dec, dict):
+            continue
         if not isinstance(dec.get("decision"), str) or not dec.get("decision"):
             _err(errors, "%s.decision must be a non-empty string" % where)
 
-    for index, blocker in enumerate(data.get("blockers") or []):
+    for index, blocker in enumerate(_list_field(data, "blockers", errors)):
         where = "$.blockers[%d]" % index
         _check_keys(blocker, ALLOWED_BLOCKER, where, errors)
+        if not isinstance(blocker, dict):
+            continue
         if not isinstance(blocker.get("what"), str) or not blocker.get("what"):
             _err(errors, "%s.what must be a non-empty string" % where)
         if not isinstance(blocker.get("needs"), str) or not blocker.get("needs"):
             _err(errors, "%s.needs must be a non-empty string (what it waits on)" % where)
 
-    for index, nxt in enumerate(data.get("next_actions") or []):
+    for index, nxt in enumerate(_list_field(data, "next_actions", errors)):
         where = "$.next_actions[%d]" % index
         _check_keys(nxt, ALLOWED_NEXT, where, errors)
+        if not isinstance(nxt, dict):
+            continue
         if not isinstance(nxt.get("action"), str) or not nxt.get("action"):
             _err(errors, "%s.action must be a non-empty string" % where)
         if not isinstance(nxt.get("requires_approval"), bool):
             _err(errors, "%s.requires_approval must be a boolean" % where)
 
-    for index, item in enumerate(data.get("files") or []):
+    for index, item in enumerate(_list_field(data, "files", errors)):
         where = "$.files[%d]" % index
         _check_keys(item, ALLOWED_FILE, where, errors)
+        if not isinstance(item, dict):
+            continue
         if not isinstance(item.get("path"), str) or not item.get("path"):
             _err(errors, "%s.path must be a non-empty string" % where)
         elif os.path.isabs(item["path"]) or re.match(r"^[A-Za-z]:", item["path"]):
             _err(errors, "%s.path must be project-relative" % where)
+        elif ".." in re.split(r"[\\/]+", item["path"]):
+            _err(errors, "%s.path must be project-relative (no '..' segment)" % where)
         if item.get("state") not in FILE_STATE:
             _err(errors, "%s.state must be one of %s" % (where, sorted(FILE_STATE)))
 
-    for index, art in enumerate(data.get("artifacts") or []):
+    for index, art in enumerate(_list_field(data, "artifacts", errors)):
         where = "$.artifacts[%d]" % index
         _check_keys(art, ALLOWED_ARTIFACT, where, errors)
+        if not isinstance(art, dict):
+            continue
+        if not isinstance(art.get("id"), str) or not art.get("id"):
+            _err(errors, "%s.id must be a non-empty string" % where)
         if art.get("kind") not in OP_KINDS:
             _err(errors, "%s.kind must be one of %s" % (where, sorted(OP_KINDS)))
+        if "state" in art and art.get("state") not in OP_STATES:
+            _err(errors, "%s.state must be one of %s" % (where, sorted(OP_STATES)))
 
-    for index, chk in enumerate(data.get("checks") or []):
+    for index, chk in enumerate(_list_field(data, "checks", errors)):
         where = "$.checks[%d]" % index
         _check_keys(chk, ALLOWED_CHECK, where, errors)
+        if not isinstance(chk, dict):
+            continue
         if not isinstance(chk.get("command"), str) or not chk.get("command"):
             _err(errors, "%s.command must be a non-empty string" % where)
-        if not isinstance(chk.get("exit"), int):
+        if isinstance(chk.get("exit"), bool) or not isinstance(chk.get("exit"), int):
             _err(errors, "%s.exit must be an integer" % where)
 
     summary = data.get("operations_summary")
@@ -585,6 +659,12 @@ def quarantine(path: str, reason: str) -> str:
     """Move a corrupt file aside so the last valid state keeps working."""
     stamp = now_iso().replace(":", "").replace("-", "")
     target = "%s.corrupt-%s" % (path, stamp)
+    suffix = 1
+    while os.path.exists(target):
+        # Never overwrite an earlier quarantine: a second corrupt file is new
+        # evidence, not a replacement for the first one.
+        target = "%s.corrupt-%s.%d" % (path, stamp, suffix)
+        suffix += 1
     try:
         os.replace(path, target)
     except OSError:
@@ -660,9 +740,12 @@ def read_ops(root: str, slug: str) -> list[dict]:
     if not os.path.exists(path):
         return []
     events: list[dict] = []
-    with open(path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
+    with open(path, "rb") as fh:
+        for raw in fh:
+            try:
+                line = raw.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                continue  # undecodable bytes never invalidate earlier evidence
             if not line:
                 continue
             try:

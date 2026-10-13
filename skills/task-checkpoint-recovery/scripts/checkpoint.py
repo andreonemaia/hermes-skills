@@ -435,9 +435,10 @@ def verify_operation(root: str, entry: dict, offline: bool) -> tuple[str, str]:
             return "unknown", "cannot read %s/%s (remote unreachable?)" % (remote, ref)
         rc, local_sha, _ = C.git_run(root, "rev-parse", ref)
         if rc != 0:
-            rc2, local_sha, _ = C.git_run(root, "rev-parse", "HEAD")
-            if rc2 != 0:
-                return "unknown", "cannot resolve local %s" % ref
+            # The remote ref exists but nothing local resolves it. Falling back
+            # to HEAD would "verify" a branch this project does not have, so the
+            # claim stays unverified instead.
+            return "unknown", "no local ref %s to compare against" % ref
         if local_sha and remote_sha == local_sha:
             return "verified", "%s/%s = %s" % (remote, ref, remote_sha[:12])
         return "failed", "%s/%s is %s, local %s" % (remote, ref, remote_sha[:12], (local_sha or "?")[:12])
@@ -1036,6 +1037,16 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if getattr(args, "expect_revision", None) is not None and args.expect_revision < 0:
         return _fail(C.EXIT_USAGE, "--expect-revision must be >= 0")
+    if getattr(args, "keep", None) is not None and args.keep < 0:
+        return _fail(C.EXIT_USAGE, "--keep must be >= 0")
+    now = getattr(args, "now", None)
+    if now:
+        try:
+            C.parse_timestamp(now)
+        except ValueError as exc:
+            # Refused before any store is opened: an unusable --now must not
+            # create a checkpoint whose timestamps cannot be parsed again.
+            return _fail(C.EXIT_USAGE, str(exc))
     if args.command in ("save", "verify", "resume-report", "record-op", "check-op", "show", "prune"):
         if args.project is None:
             args.project = "."
