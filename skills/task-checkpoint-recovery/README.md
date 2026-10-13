@@ -76,8 +76,8 @@ python scripts/checkpoint.py --project /path/to/repo check-op --task my-task --k
 
 `verify` reports findings by id and severity (`critical`, `warning`, `info`):
 `history_rewritten`, `op_stale_claim`, `unsafe_path` (critical); `head_diverged`,
-`op_unresolved`, `op_unknown`, `branch_mismatch`, `dirty_tree`, `file_missing`,
-`file_drift` (warning); `op_planned`, `op_completed_unrecorded`, `git_unavailable`,
+`op_unresolved`, `op_planned_landed`, `op_unknown`, `branch_mismatch`, `dirty_tree`,
+`file_missing`, `file_drift` (warning); `op_planned`, `op_completed_unrecorded`, `git_unavailable`,
 `head_advanced`, `stale_checkpoint` (info).
 
 ## Files

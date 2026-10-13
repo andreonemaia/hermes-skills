@@ -107,6 +107,7 @@ pruned); `--dry-run` reports what would be removed.
 | `unsafe_path` | critical | a recorded path escapes the project |
 | `head_diverged` | warning | local and remote HEAD diverged |
 | `op_unresolved` | warning | ledger records a failure that needs a decision |
+| `op_planned_landed` | warning | recorded as `planned`, but reality confirms the effect is already present |
 | `op_unknown` | warning | ledger state cannot be checked |
 | `branch_mismatch` | warning | the checkpoint branch differs from the current branch |
 | `dirty_tree` | warning | uncommitted changes present |
