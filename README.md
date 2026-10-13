@@ -47,6 +47,7 @@ hermes-skills/
 |-------|-------------|-----------|---------|
 | [`independent-code-review`](skills/independent-code-review/) | Run a code review with a separate reviewer model, in an isolated process, strictly read-only. Covers GitHub PRs, branch diffs, staged and unstaged changes. | windows | 1.0.0 |
 | [`comfyui-model-manager`](skills/comfyui-model-manager/) | Inventory, verify and fetch ComfyUI model files against a SHA-256 manifest, and statically validate workflows before running them. Complements the official `comfyui` skill. | windows | 0.1.0 |
+| [`task-checkpoint-recovery`](skills/task-checkpoint-recovery/) | Persist and revalidate the logical/operational state of a long-running task (objective, steps, decisions, blockers, next actions, ledger of effect-carrying operations) so it can be interrupted and resumed without losing decisions or repeating work already done. Complements native sessions, file checkpoints and context compaction. | windows | 0.1.0 |
 
 ## Installing a skill manually
 
