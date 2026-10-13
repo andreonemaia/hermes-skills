@@ -15,6 +15,7 @@ import datetime
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -242,6 +243,131 @@ class TestHandEditedStoreIsReported(RegressionBase):
         empty = Path(tempfile.mkdtemp(prefix="tcr-empty-"))
         self.addCleanup(shutil.rmtree, empty, True)
         self.validate(project=empty, expect=C.EXIT_MISSING)
+
+
+# ---------------------------------------------------------------------------
+# 7. recorded absences are truth, unrecorded ones are drift
+# ---------------------------------------------------------------------------
+
+class TestRecordedAbsenceIsNotDrift(RegressionBase):
+    def test_a_recorded_deletion_never_fails_the_digest_check(self) -> None:
+        # ``save`` stores a path it cannot find as state="deleted". That
+        # absence is the recorded truth, so --digests must not report it: a
+        # checkpoint that records a deletion would otherwise fail forever.
+        self.save("--title", "T", "--file", "gone.txt")
+        entry = [f for f in self.checkpoint()["files"] if f["path"] == "gone.txt"][0]
+        self.assertEqual(entry["state"], "deleted")
+        self.validate("--digests", expect=C.EXIT_OK)
+
+    def test_a_file_removed_after_being_recorded_is_still_drift(self) -> None:
+        # The mirror image: recorded as present, gone from disk. That is real
+        # drift and must stay visible.
+        (self.project / "kept.txt").write_text("x\n", encoding="utf-8")
+        self.save("--title", "T", "--file", "kept.txt")
+        (self.project / "kept.txt").unlink()
+        proc = self.validate("--digests", expect=C.EXIT_CORRUPT)
+        self.assertIn("missing on disk", proc.stdout)
+
+
+# ---------------------------------------------------------------------------
+# 8. only slug-shaped directories are treated as tasks
+# ---------------------------------------------------------------------------
+
+class TestDiscoverIgnoresNonSlugDirectories(RegressionBase):
+    def test_stray_directories_are_not_validated_as_tasks(self) -> None:
+        self.save("--title", "T")
+        for name in ("backup copy", "UPPER", ".hidden", "bad name"):
+            (self.store / name).mkdir(parents=True, exist_ok=True)
+        report = json.loads(self.validate("--json", expect=C.EXIT_OK).stdout)
+        # A directory the CLI could never have created is not a task; listing it
+        # as one turned a stray folder into a permanent CI failure.
+        self.assertEqual([r["task"] for r in report["results"]], ["demo"])
+
+
+# ---------------------------------------------------------------------------
+# 9. release() unlinks the lock it created, not whatever sits at the path
+# ---------------------------------------------------------------------------
+
+class TestLockReleaseInodeGuard(RegressionBase):
+    """``release`` unlinks the lock it created, not whatever sits at the path.
+
+    The token check alone is not enough: a lock reclaimed as stale and
+    re-acquired by another process can carry the same token text, so the guard
+    is the file's identity. The test drives that identity directly because the
+    scenario cannot be built by replacing the file on Windows -- an open lock
+    file cannot be unlinked there.
+    """
+
+    def test_release_keeps_a_lock_whose_identity_changed(self) -> None:
+        store = self.store / "demo"
+        store.mkdir(parents=True, exist_ok=True)
+        lock = store / ".lock"
+        held = C.FileLock(str(lock))
+        # A different file stands in for the re-acquired lock: our token text is
+        # at ``lock``, but the descriptor this object holds belongs elsewhere.
+        other = store / ".other"
+        other.write_text("x\n", encoding="utf-8")
+        fd = os.open(str(other), os.O_RDWR)
+        held._fd = fd
+        held._ino = os.fstat(fd).st_ino
+        lock.write_text(held._token + "\nat=2026-10-13T12:00:00-03:00\n", encoding="utf-8")
+        held.release()  # closes ``fd`` as part of releasing
+        self.assertTrue(lock.exists(), "release() deleted a lock whose inode changed")
+        self.assertIn(held._token, lock.read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# 10. every finding the code can emit is documented, with its real severity
+# ---------------------------------------------------------------------------
+
+class TestFindingIdsAreDocumented(RegressionBase):
+    """``op_planned_landed`` shipped undocumented, so a table of findings that
+    looks exhaustive but is not. This scans the code for emitted ids instead of
+    trusting the tables, and fails on both a missing id and a stale severity."""
+
+    EMIT = re.compile(r'"id":\s*"([a-z0-9_]+)"\s*,\s*"severity":\s*"([a-z]+)"')
+    ID_IN_CELL = re.compile(r"`([a-z0-9_]+)`")
+
+    def emitted(self) -> dict[str, str]:
+        found: dict[str, str] = {}
+        for path in sorted(SCRIPTS.glob("*.py")):
+            for finding_id, severity in self.EMIT.findall(path.read_text(encoding="utf-8")):
+                found[finding_id] = severity
+        self.assertTrue(found, "no findings found: the scanner stopped matching")
+        return found
+
+    def schema_rows(self) -> dict[str, str]:
+        """Parse only the ``## Finding ids`` table. A row may group several ids
+        in one cell (``file_missing`` / ``file_drift``), so every id in the
+        first cell takes the row's severity."""
+        schema = (HERE.parent / "references" / "schema.md").read_text(encoding="utf-8")
+        section = schema.split("## Finding ids", 1)[1].split("\n## ", 1)[0]
+        rows: dict[str, str] = {}
+        for line in section.splitlines():
+            if not line.startswith("|"):
+                continue
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if len(cells) < 2:
+                continue
+            for finding_id in self.ID_IN_CELL.findall(cells[0]):
+                rows[finding_id] = cells[1]
+        self.assertTrue(rows, "no finding rows parsed: the table format changed")
+        return rows
+
+    def test_schema_table_lists_every_emitted_finding_with_its_severity(self) -> None:
+        rows = self.schema_rows()
+        for finding_id, severity in sorted(self.emitted().items()):
+            self.assertIn(finding_id, rows, "finding %r is emitted but absent from schema.md" % finding_id)
+            self.assertEqual(
+                rows[finding_id], severity,
+                "schema.md documents %r as %s but the code emits %s" % (finding_id, rows[finding_id], severity),
+            )
+
+    def test_readme_mentions_every_emitted_finding(self) -> None:
+        readme = (HERE.parent / "README.md").read_text(encoding="utf-8")
+        for finding_id in sorted(self.emitted()):
+            self.assertIn("`%s`" % finding_id, readme,
+                          "finding %r is emitted but absent from README.md" % finding_id)
 
 
 if __name__ == "__main__":  # pragma: no cover

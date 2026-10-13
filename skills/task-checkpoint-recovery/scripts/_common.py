@@ -378,6 +378,11 @@ class FileLock:
         self.poll = poll
         self.stale_after = stale_after
         self._fd = None
+        #: Inode of the lock file this instance created. ``release`` only
+        #: unlinks while the path still resolves to this inode, so a lock that
+        #: was reclaimed as stale and re-acquired by another process is never
+        #: deleted out from under its new owner.
+        self._ino = None
         #: Written into the lock file. ``release`` only unlinks the lock while
         #: the file still carries this token, so a reclaimed or replaced lock is
         #: never deleted out from under its new owner.
@@ -403,6 +408,11 @@ class FileLock:
             os.write(fd, ("%s\nat=%s\n" % (self._token, now_iso())).encode("utf-8"))
             os.fsync(fd)
             self._fd = fd
+            # Record the identity of the file we created. ``release`` only
+            # unlinks while the path still resolves to this inode, so a lock
+            # that was reclaimed as stale and re-acquired by another process is
+            # never deleted out from under its new owner.
+            self._ino = os.fstat(fd).st_ino
             return self
 
     def _reclaim_if_stale(self) -> bool:
@@ -447,6 +457,15 @@ class FileLock:
             return
         if self._token not in body:
             # Another process reclaimed the lock and wrote its own token.
+            return
+        # Second guard, closing the read-check-unlink window: if the lock was
+        # reclaimed as stale and re-acquired between the read above and the
+        # unlink below, the path now resolves to a different inode and belongs
+        # to the new holder.
+        try:
+            if os.stat(self.path).st_ino != self._ino:
+                return
+        except OSError:
             return
         try:
             os.unlink(self.path)

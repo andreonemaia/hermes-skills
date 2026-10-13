@@ -39,6 +39,12 @@ def _digest_problems(root, data):
             continue
         target = os.path.join(root, rel_safe)
         if not os.path.exists(target):
+            if item.get("state") == "deleted":
+                # ``save`` records a path it cannot find as ``state="deleted"``
+                # on purpose: the absence is the recorded truth, not drift.
+                # Flagging it would fail every checkpoint that records a
+                # deletion, forever, in CI.
+                continue
             problems.append("files path %r is missing on disk" % rel)
             continue
         recorded = item.get("sha256")
@@ -131,7 +137,9 @@ def discover(root, task=None):
     if not os.path.isdir(base):
         return []
     return sorted(
-        name for name in os.listdir(base) if os.path.isdir(os.path.join(base, name))
+        name
+        for name in os.listdir(base)
+        if os.path.isdir(os.path.join(base, name)) and C.SLUG_RE.match(name)
     )
 
 
