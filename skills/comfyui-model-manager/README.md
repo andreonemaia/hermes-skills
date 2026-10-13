@@ -1,67 +1,64 @@
 # comfyui-model-manager
 
-Find a ComfyUI installation, inventory the model files it already has, verify a
-manifest against them, and fetch the missing ones **only after checking the
-SHA-256 digest**. Also validate a workflow against a running server before
-spending GPU time on a prompt that cannot load.
+Encontre uma instalação do ComfyUI, faça o inventário dos arquivos de modelo que
+ela já tem, confira um manifesto contra eles e baixe apenas o que falta,
+**sempre depois de conferir o digest SHA-256**. Também valida um workflow contra
+um servidor em execução antes de gastar tempo de GPU com um prompt que não vai
+carregar.
 
-This skill complements the official `comfyui` skill, which covers *running*
-workflows. This one covers the two failures that happen before a run starts:
-models that are missing, truncated or duplicated, and graphs that reference
-nodes or files that do not exist.
+Esta skill complementa a skill oficial `comfyui`, que cobre *executar* workflows.
+Esta aqui cobre as duas falhas que acontecem antes de uma execução começar:
+modelos ausentes, truncados ou duplicados, e grafos que referenciam nós ou
+arquivos que não existem.
 
-## The problem it solves
+## O que é
 
-A ComfyUI model folder is a few hundred gigabytes of files downloaded from
-various places over months, and a workflow is a JSON graph that silently
-assumes all of them are present and correct. Both fail late and expensively:
+Um conjunto de scripts que responde a três perguntas **sem tocar na GPU**: *o que
+está em disco*, *aquilo é realmente o que diz ser*, e *esse grafo vai carregar*.
 
-- A download that was interrupted leaves a file with the right name and the
-  wrong bytes. ComfyUI loads it far enough to fail with a confusing tensor
-  error, or worse, produces garbage.
-- A workflow is submitted, queued, and only then rejected because one node
-  class was renamed or one checkpoint is in the wrong folder.
-- Duplicate checkpoints accumulate because nothing ever compared digests.
+O problema que ela resolve: uma pasta de modelos do ComfyUI é uma centena de
+gigabytes de arquivos baixados de vários lugares ao longo de meses, e um workflow
+é um grafo JSON que presume, em silêncio, que todos eles estão presentes e
+corretos. Os dois falham tarde e caro:
 
-The scripts here answer three questions without touching the GPU: *what is on
-disk*, *is it what it claims to be*, and *will this graph load*.
+- Um download interrompido deixa um arquivo com o nome certo e os bytes errados.
+  O ComfyUI carrega até certo ponto e falha com um erro de tensor confuso ou,
+  pior, produz resultado sem sentido.
+- Um workflow é enviado, entra na fila e só então é rejeitado, porque uma classe
+  de nó foi renomeada ou um checkpoint está na pasta errada.
+- Checkpoints duplicados se acumulam, porque nada nunca comparou digests.
 
-## What it ships
+### O que a skill entrega
 
-| Script | Purpose | Needs a server |
-|--------|---------|----------------|
-| `scripts/comfy_env.py` | Discover the installation, the API version, and every model root and folder. | Optional (`--base-url` for a remote instance) |
-| `scripts/comfy_models.py` | `inventory`, `verify`, `install` against a JSON manifest. | No |
-| `scripts/comfy_validate.py` | Statically validate a workflow (API or UI format) against `/object_info`. | Yes |
-| `scripts/_common.py` | Shared helpers: path safety, hashing, config parsing, HTTP. | - |
+| Script | Finalidade | Precisa de servidor |
+|--------|-----------|----------------|
+| `scripts/comfy_env.py` | Descobre a instalação, a versão da API e cada raiz e pasta de modelos. | Opcional (`--base-url` para uma instância remota) |
+| `scripts/comfy_models.py` | `inventory`, `verify` e `install` a partir de um manifesto JSON. | Não |
+| `scripts/comfy_validate.py` | Valida estaticamente um workflow (formato API ou UI) contra `/object_info`. | Sim |
+| `scripts/_common.py` | Auxiliares compartilhados: segurança de caminhos, hashing, leitura de configuração, HTTP. | - |
 
-Standard library only. No `pip install`, and no import of ComfyUI itself.
+Somente biblioteca padrão. Sem `pip install` e sem importar o próprio ComfyUI.
 
-## Design decisions
+## Quando usar
 
-**A missing digest is a hard error.** An unverifiable download cannot be
-distinguished from a corrupted one, so a manifest entry without a valid
-64-character `sha256` is rejected rather than downloaded on trust.
+- Antes de baixar dezenas de gigabytes, para conferir o que já existe e evitar
+  baixar de novo.
+- Quando um modelo parece corrompido e você precisa saber se os bytes conferem
+  com o digest esperado.
+- Quando você suspeita de checkpoints duplicados ocupando espaço.
+- Antes de enviar um workflow para a fila, para saber se o grafo carrega e se os
+  arquivos que ele cita existem.
 
-**Downloads land in a `.part` sidecar and are renamed only after the digest
-matches.** An interrupted transfer therefore never leaves a truncated file
-behind a valid filename. A digest mismatch deletes the sidecar; a size mismatch
-keeps it so the next run resumes.
+## Exemplo rápido de uso
 
-**Destructive actions require an explicit flag.** Without `--yes`, `install` is
-a dry run that prints the plan and transfers nothing. Replacing a file whose
-digest differs additionally requires `--allow-overwrite`. Free space is checked
-against the bytes still needed before the transfer starts.
+```
+Use comfyui-model-manager para me dizer quais modelos já estão instalados e quais checkpoints estão duplicados.
+```
 
-**The manifest is untrusted input.** `folder` and `filename` are proven to stay
-inside the model directory before anything touches the filesystem, so a
-manifest containing `..` or an absolute path is rejected.
+O agente roda `comfy_env.py --json`, depois `comfy_models.py inventory
+--duplicates`, e relata as pastas, o tamanho total e os grupos de duplicatas.
 
-**Validation is static and says so.** A clean run means the graph is loadable
-and the files it names exist. It does not mean the inference result is correct,
-and nothing here executes a prompt.
-
-## Workflow
+## Como funciona
 
 ```
 comfy_env.py  --json          # where is ComfyUI, what folders exist
@@ -79,52 +76,65 @@ comfy_models.py install       # dry run by default; --yes to transfer
 comfy_validate.py workflow.json   # will this graph load?
 ```
 
-## Usage examples
+### Decisões de projeto
 
-### 1. Find out what is installed
+**Digest ausente é erro grave.** Um download que não pode ser verificado é
+indistinguível de um corrompido, então uma entrada de manifesto sem um `sha256`
+válido de 64 caracteres é rejeitada, em vez de baixada na confiança.
 
-```
-Use comfyui-model-manager to tell me what models are already installed and
-which checkpoints are duplicated.
-```
+**Os downloads caem em um arquivo `.part` ao lado e só são renomeados depois que
+o digest confere.** Assim, uma transferência interrompida nunca deixa um arquivo
+truncado atrás de um nome válido. Divergência de digest apaga o sidecar;
+divergência de tamanho o mantém, para a próxima execução continuar de onde parou.
 
-The agent runs `comfy_env.py --json`, then `comfy_models.py inventory
---duplicates`, and reports the folders, the total size, and the duplicate
-groups.
+**Ações destrutivas exigem uma flag explícita.** Sem `--yes`, `install` é uma
+simulação que imprime o plano e não transfere nada. Substituir um arquivo cujo
+digest difere exige também `--allow-overwrite`. O espaço livre é conferido contra
+os bytes ainda necessários antes de a transferência começar.
 
-### 2. Check a folder before a large download
+**O manifesto é entrada não confiável.** `folder` e `filename` são provados
+dentro do diretório de modelos antes de qualquer coisa tocar o sistema de
+arquivos, então um manifesto contendo `..` ou um caminho absoluto é rejeitado.
 
-```
-Verify my manifest.json against the models directory and tell me how much
-still has to be downloaded.
-```
+**A validação é estática e diz isso.** Uma execução limpa significa que o grafo é
+carregável e que os arquivos que ele nomeia existem. Não significa que o
+resultado da inferência está correto, e nada aqui executa um prompt.
 
-`verify` prints a per-entry status and the bytes needed; exit code `5` means at
-least one entry needs attention.
+## Exemplos adicionais
 
-### 3. Fetch only what is missing
-
-```
-Install the missing models from manifest.json.
-```
-
-The agent runs the dry run first and shows the plan. The transfer only happens
-after the `--yes` form is run deliberately.
-
-### 4. Validate a workflow before queueing it
+### Conferir uma pasta antes de um download grande
 
 ```
-Validate workflow.json against my running ComfyUI before I run it.
+Confira meu manifest.json contra a pasta de modelos e diga quanto ainda
+precisa ser baixado.
 ```
 
-Reports unknown node classes, dangling links, missing required inputs, type
-mismatches, and model filenames the graph names that are not in any configured
-folder.
+`verify` imprime um status por entrada e os bytes necessários; o código de saída
+`5` significa que pelo menos uma entrada precisa de atenção.
 
-## Installation
+### Baixar apenas o que falta
 
-Copy this directory into the `creative/` category folder of your Hermes skills
-directory, so it sits next to the official `comfyui` skill:
+```
+Instale os modelos que faltam a partir do manifest.json.
+```
+
+O agente roda a simulação primeiro e mostra o plano. A transferência só acontece
+depois que a forma com `--yes` é executada de propósito.
+
+### Validar um workflow antes de enfileirá-lo
+
+```
+Valide o workflow.json contra o meu ComfyUI em execução antes de eu rodá-lo.
+```
+
+Reporta classes de nó desconhecidas, links pendurados, entradas obrigatórias
+ausentes, incompatibilidades de tipo e nomes de arquivos de modelo citados pelo
+grafo que não estão em nenhuma pasta configurada.
+
+## Instalação e requisitos
+
+Copie este diretório para a pasta de categoria `creative/` do seu diretório de
+skills do Hermes, para que ele fique ao lado da skill oficial `comfyui`:
 
 ```bash
 # Linux / macOS
@@ -136,38 +146,41 @@ cp -r skills/comfyui-model-manager ~/.hermes/skills/creative/
 Copy-Item -Recurse skills\comfyui-model-manager "$env:LOCALAPPDATA\hermes\skills\creative\"
 ```
 
-Then confirm with `hermes skills list`. See
+Depois confirme com `hermes skills list`. Veja
 [`../../docs/installation.md`](../../docs/installation.md).
 
-## Tests
+Requisitos: Python 3.8+ (somente biblioteca padrão). Para validar um workflow é
+necessário um servidor ComfyUI em execução, acessível em `--base-url` ou na
+configuração local.
+
+## Testes
 
 ```bash
 cd skills/comfyui-model-manager
 python -m unittest discover -s tests -t tests
 ```
 
-Standard-library `unittest`. No network, no live ComfyUI server, and path
-discovery is pinned to a temporary directory so the suite never reads the host
-machine's real configuration.
+`unittest` da biblioteca padrão. Sem rede, sem servidor ComfyUI ativo, e a
+descoberta de caminhos é fixada em um diretório temporário, para que a suíte
+nunca leia a configuração real da máquina hospedeira.
 
-## Limitations
+## Limitações
 
-- **Windows-tested only.** `platforms: [windows]`. The scripts use
-  `os.path` and `pathlib` and should work elsewhere, but that has not been run,
-  so it is not claimed.
-- **`--hash` reads every byte.** On a large model folder it takes minutes. It
-  is for proving identity, not for a quick listing.
-- **Validation needs a running server.** `comfy_env.py` and `comfy_models.py`
-  work offline; `comfy_validate.py` cannot, because the node definitions come
-  from `/object_info`.
-- **Model availability is a warning, not an error.** A workflow naming a
-  checkpoint that is not installed still loads; the skill reports it and lets
-  you decide.
-- **No download resumption across a digest change.** If the upstream file
-  changes, the old `.part` is discarded on the next size check.
-- **No ComfyUI Manager integration.** Custom-node installation is out of scope;
-  this skill manages model files and validates graphs.
+- **Testada apenas no Windows.** `platforms: [windows]`. Os scripts usam
+  `os.path` e `pathlib` e devem funcionar em outros lugares, mas isso não foi
+  executado, então não é afirmado.
+- **`--hash` lê cada byte.** Em uma pasta de modelos grande, isso leva minutos.
+  Serve para provar identidade, não para uma listagem rápida.
+- **A validação precisa de um servidor em execução.** `comfy_env.py` e
+  `comfy_models.py` funcionam offline; `comfy_validate.py` não, porque as
+  definições de nó vêm de `/object_info`.
+- **Disponibilidade de modelo é aviso, não erro.** Um workflow que cita um
+  checkpoint não instalado ainda carrega; a skill reporta e deixa você decidir.
+- **Sem retomada de download quando o digest muda.** Se o arquivo de origem
+  mudar, o `.part` antigo é descartado na próxima verificação de tamanho.
+- **Sem integração com o ComfyUI Manager.** Instalação de nós personalizados
+  está fora do escopo; esta skill gerencia arquivos de modelo e valida grafos.
 
-## License
+## Licença
 
-MIT, like the rest of this repository.
+MIT, como o resto deste repositório.

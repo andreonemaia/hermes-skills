@@ -1,59 +1,120 @@
 # Hermes Skills
 
-A public, community-oriented collection of skills for **Hermes Agent** (by Nous
-Research). Each skill is a self-contained, reusable procedure that Hermes can
-load on demand to perform a specific task the same way every time.
+Uma coleção pública de skills para o **Hermes Agent** (da Nous Research), feita
+com e para a comunidade. Cada skill é um procedimento autocontido e reutilizável
+que o Hermes carrega sob demanda para executar uma tarefa específica sempre do
+mesmo jeito.
 
-This repository is also an experiment in the open: skills are developed here,
-reviewed independently, versioned with Git, and published through pull requests.
+Este repositório também é um experimento aberto: as skills são desenvolvidas
+aqui, revisadas de forma independente, versionadas com Git e publicadas por meio
+de pull requests.
 
-## What is a Hermes Agent skill?
+## O que é uma skill do Hermes Agent?
 
-A skill is a directory containing a `SKILL.md` file with YAML frontmatter and a
-Markdown body. The frontmatter declares the skill's `name`, `description`
-(which tells the agent *when* to load it), `version`, supported `platforms`, and
-optional metadata such as tags and category. The body contains the actual
-procedure: prerequisites, exact commands, pitfalls, and a verification checklist.
+Uma skill é um diretório que contém um arquivo `SKILL.md` com frontmatter YAML e
+um corpo em Markdown. O frontmatter declara o `name` da skill, a `description`
+(que diz ao agente *quando* carregá-la), a `version`, as `platforms` suportadas
+e metadados opcionais, como tags e categoria. O corpo traz o procedimento em si:
+pré-requisitos, comandos exatos, armadilhas conhecidas e um checklist de
+verificação.
 
-Skills are progressive disclosure: the agent reads only the `name` and
-`description` at startup, and loads the full body only when the skill is
-relevant to the current task. That means a good `description` matters as much as
-a good body.
+As skills funcionam por divulgação progressiva: o agente lê apenas o `name` e a
+`description` na inicialização e carrega o corpo completo somente quando a skill
+é relevante para a tarefa em andamento. Ou seja, uma boa `description` vale
+tanto quanto um bom corpo.
 
-## Repository structure
+## Estrutura do repositório
 
 ```
 hermes-skills/
-├── README.md              # this file
+├── README.md              # este arquivo
 ├── LICENSE                # MIT
-├── CONTRIBUTING.md        # how to contribute a skill
-├── CHANGELOG.md           # Keep a Changelog style
+├── CONTRIBUTING.md        # como contribuir com uma skill
+├── CHANGELOG.md           # no estilo Keep a Changelog
 ├── .gitignore
 ├── docs/
-│   ├── installation.md    # how to install skills into Hermes
-│   ├── development.md     # how to write and version a skill
-│   └── testing.md         # how to validate a skill before publishing
+│   ├── installation.md    # como instalar as skills no Hermes
+│   ├── development.md     # como escrever e versionar uma skill
+│   └── testing.md         # como validar uma skill antes de publicar
 └── skills/
     └── <skill-name>/
-        ├── SKILL.md       # required: the skill itself
-        ├── README.md      # optional: human-facing explanation
-        ├── scripts/       # optional: helper scripts the skill runs
-        └── tests/         # optional: automated tests for those scripts
+        ├── SKILL.md       # obrigatório: a própria skill
+        ├── README.md      # opcional: explicação para pessoas
+        ├── scripts/       # opcional: scripts auxiliares que a skill executa
+        └── tests/         # opcional: testes automatizados para esses scripts
 ```
 
-## Available skills
+## Primeiros passos
 
-| Skill | Description | Platforms | Version |
-|-------|-------------|-----------|---------|
-| [`independent-code-review`](skills/independent-code-review/) | Run a code review with a separate reviewer model, in an isolated process, strictly read-only. Covers GitHub PRs, branch diffs, staged and unstaged changes. | windows | 1.0.0 |
-| [`comfyui-model-manager`](skills/comfyui-model-manager/) | Inventory, verify and fetch ComfyUI model files against a SHA-256 manifest, and statically validate workflows before running them. Complements the official `comfyui` skill. | windows | 0.1.0 |
-| [`task-checkpoint-recovery`](skills/task-checkpoint-recovery/) | Persist and revalidate the logical/operational state of a long-running task (objective, steps, decisions, blockers, next actions, ledger of effect-carrying operations) so it can be interrupted and resumed without losing decisions or repeating work already done. Complements native sessions, file checkpoints and context compaction. | windows | 0.1.0 |
+1. **Instale uma skill.** Copie o diretório da skill para a pasta de skills do
+   seu perfil do Hermes (veja "Instalando uma skill manualmente", mais abaixo).
+2. **Peça em linguagem natural.** Não é preciso decorar comandos: descreva o que
+   você quer e o Hermes carrega a skill cuja `description` combina com a tarefa.
+   Por exemplo: `Revise o PR 42 deste repositório de forma independente.`
+3. **Leia o README da skill.** Cada skill tem um README em português com o que
+   ela faz, quando usar, exemplos prontos para copiar e limitações.
 
-## Installing a skill manually
+## Skills disponíveis
 
-Skills live in a `skills/` directory inside the Hermes profile directory.
+| Skill | O que faz | Plataformas | Versão |
+|-------|-----------|-------------|--------|
+| [`independent-code-review`](skills/independent-code-review/) | Faz a revisão de código com um processo revisor separado, isolado e estritamente somente leitura. Cobre pull requests do GitHub, diffs de branch, mudanças em staging e mudanças não preparadas. | windows | 1.0.0 |
+| [`comfyui-model-manager`](skills/comfyui-model-manager/) | Inventaria, verifica e baixa arquivos de modelo do ComfyUI a partir de um manifesto SHA-256, e valida workflows estaticamente antes de executá-los. Complementa a skill oficial `comfyui`. | windows | 0.1.0 |
+| [`task-checkpoint-recovery`](skills/task-checkpoint-recovery/) | Persiste e revalida o estado lógico e operacional de uma tarefa longa (objetivo, passos, decisões, bloqueios, próximas ações e um registro das operações com efeito colateral), para que ela possa ser interrompida e retomada sem perder decisões nem repetir trabalho já feito. Complementa as sessões nativas, os checkpoints de arquivo e a compactação de contexto. | windows | 0.1.0 |
 
-1. Copy the skill directory into your skills tree, keeping the category folder:
+### `independent-code-review`
+
+**Finalidade:** obter uma revisão de código de um **processo revisor separado**,
+sem ferramentas e sem acesso à conversa de quem escreveu o código, configurado
+para usar um modelo diferente do autor. Quando o modelo revisor acaba sendo o
+mesmo do autor, a skill relata isso em vez de fingir independência.
+
+**Exemplo de pedido:**
+
+```
+Revise o PR 42 deste repositório de forma independente.
+```
+
+**Detalhes:** [README da skill](skills/independent-code-review/README.md)
+
+### `comfyui-model-manager`
+
+**Finalidade:** descobrir uma instalação do ComfyUI, inventariar os arquivos de
+modelo em disco, conferir um manifesto contra eles e baixar apenas o que falta,
+**sempre depois de conferir o digest SHA-256**. Também valida um workflow contra
+um servidor em execução antes de gastar tempo de GPU.
+
+**Exemplo de pedido:**
+
+```
+Use comfyui-model-manager para me dizer quais modelos já estão instalados e quais checkpoints estão duplicados.
+```
+
+**Detalhes:** [README da skill](skills/comfyui-model-manager/README.md)
+
+### `task-checkpoint-recovery`
+
+**Finalidade:** guardar o estado de uma tarefa longa (o que já foi feito, quais
+decisões foram tomadas e por quê, o que está bloqueado e quais efeitos colaterais
+já aconteceram) em um pequeno arquivo JSON dentro do projeto, e **revalidar cada
+afirmação contra o projeto** antes de agir com base nela. É o que evita repetir
+um `push`, um merge ou um download depois de uma interrupção.
+
+**Exemplo de pedido:**
+
+```
+Salve um checkpoint desta tarefa antes de eu encerrar a sessão.
+```
+
+**Detalhes:** [README da skill](skills/task-checkpoint-recovery/README.md)
+
+## Instalando uma skill manualmente
+
+As skills ficam em um diretório `skills/` dentro do diretório de dados do
+Hermes.
+
+1. Copie o diretório da skill para a sua árvore de skills, mantendo a pasta de
+   categoria:
 
    ```bash
    # Linux / macOS
@@ -65,48 +126,51 @@ Skills live in a `skills/` directory inside the Hermes profile directory.
    Copy-Item -Recurse skills\independent-code-review "$env:LOCALAPPDATA\hermes\skills\software-development\"
    ```
 
-2. Verify that Hermes sees it:
+2. Confirme que o Hermes encontrou a skill:
 
    ```bash
    hermes skills list
    ```
 
-3. The skill is now available. See `docs/installation.md` for details, including
-   the exact profile paths on each platform.
+3. A skill já está disponível. Veja `docs/installation.md` para os detalhes,
+   incluindo os caminhos exatos do perfil em cada plataforma.
 
-## Using a skill
+## Usando uma skill
 
-Skills load automatically when their `description` matches the task, or can be
-invoked explicitly as a slash command using the skill name, for example:
+As skills são carregadas automaticamente quando a `description` combina com a
+tarefa, ou podem ser invocadas explicitamente como comando de barra, usando o
+nome da skill, por exemplo:
 
 ```
 /independent-code-review
 ```
 
-Read the skill's own `README.md` for a human-oriented explanation of what it
-does and worked examples.
+Leia o `README.md` da própria skill para uma explicação voltada a pessoas, com
+exemplos práticos.
 
-## Compatibility and versioning
+## Compatibilidade e versionamento
 
-- Each skill declares the `platforms` it was actually tested on. **No skill in
-  this repository claims support for a platform it was not tested on**, and an
-  untested platform is deliberately omitted rather than guessed.
-- Each skill is versioned independently with [Semantic Versioning](https://semver.org/).
-  The `version` field in `SKILL.md` is the source of truth.
-- Changes to a skill are recorded in the repository `CHANGELOG.md`.
-- Some skills document behavior of a **specific Hermes CLI version**. Where that
-  is the case, the skill states the version tested and instructs re-validation
-  when the CLI changes. Behavior validated against one version is never
-  presented as a permanent API guarantee.
+- Cada skill declara as `platforms` em que foi realmente testada. **Nenhuma
+  skill deste repositório afirma suporte a uma plataforma em que não foi
+  testada**: uma plataforma não testada é deliberadamente omitida, nunca
+  adivinhada.
+- Cada skill é versionada de forma independente com [Semantic Versioning](https://semver.org/).
+  O campo `version` no `SKILL.md` é a fonte da verdade.
+- Mudanças em uma skill são registradas no `CHANGELOG.md` do repositório.
+- Algumas skills documentam o comportamento de uma **versão específica da CLI do
+  Hermes**. Nesses casos, a skill informa a versão testada e pede revalidação
+  quando a CLI mudar. Um comportamento validado em uma versão nunca é
+  apresentado como garantia permanente de API.
 
-## Contributing
+## Contribuindo
 
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
-In short: one skill per directory, a mandatory `SKILL.md` with valid
-frontmatter, no secrets and no personal data, only tested platforms declared,
-and changes proposed through a branch and a pull request that passes an
-independent review before merge.
+Contribuições são bem-vindas. Leia o [CONTRIBUTING.md](CONTRIBUTING.md) antes de
+começar. Em resumo: uma skill por diretório, `SKILL.md` obrigatório com
+frontmatter válido, nenhum segredo e nenhum dado pessoal, apenas plataformas
+realmente testadas, documentação humana em português brasileiro (PT-BR) e
+mudanças propostas por branch e pull request que passa por uma revisão
+independente antes do merge.
 
-## License
+## Licença
 
 [MIT](LICENSE).

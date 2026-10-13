@@ -1,22 +1,22 @@
-# Installation
+# Instalação
 
-This guide explains where Hermes Agent looks for skills and how to install a
-skill from this repository.
+Este guia explica onde o Hermes Agent procura por skills e como instalar uma
+skill deste repositório.
 
-## Where skills live
+## Onde as skills ficam
 
-Hermes loads skills from the `skills/` directory inside its data directory.
-The location depends on the platform:
+O Hermes carrega skills a partir do diretório `skills/` dentro do seu diretório
+de dados. O local depende da plataforma:
 
-| Platform | Skills directory |
+| Plataforma | Diretório de skills |
 |----------|------------------|
-| Windows | `%LOCALAPPDATA%\hermes\skills` (typically `C:\Users\<you>\AppData\Local\hermes\skills`) |
+| Windows | `%LOCALAPPDATA%\hermes\skills` (normalmente `C:\Users\<seu-usuário>\AppData\Local\hermes\skills`) |
 | Linux / macOS | `${HERMES_HOME:-$HOME/.hermes}/skills` |
 
-Inside that directory, skills are grouped by category, e.g.
-`skills/software-development/`, `skills/github/`. The category folder is a
-convention for organisation; what makes a directory a skill is the presence of
-a `SKILL.md` file in it.
+Dentro desse diretório, as skills são agrupadas por categoria, por exemplo
+`skills/software-development/`, `skills/github/`. A pasta de categoria é uma
+convenção de organização; o que faz um diretório ser uma skill é a presença de um
+arquivo `SKILL.md` nele.
 
 ```
 <skills-dir>/
@@ -26,19 +26,19 @@ a `SKILL.md` file in it.
         └── README.md
 ```
 
-If a non-default profile is in use, its data directory is separate, e.g.
-`<hermes-data-dir>/profiles/<profile>/skills`. Run `hermes config path` to see
-the active data directory for your installation.
+Se você usa um perfil que não é o padrão, o diretório de dados dele é separado,
+por exemplo `<hermes-data-dir>/profiles/<profile>/skills`. Execute
+`hermes config path` para ver o diretório de dados ativo na sua instalação.
 
-## Installing a skill manually
+## Instalando uma skill manualmente
 
-1. Clone this repository (or download a single skill directory):
+1. Clone este repositório (ou baixe apenas o diretório de uma skill):
 
    ```bash
    git clone https://github.com/andreonemaia/hermes-skills.git
    ```
 
-2. Copy the skill into the category folder of your skills directory:
+2. Copie a skill para a pasta de categoria do seu diretório de skills:
 
    ```bash
    # Linux / macOS
@@ -54,23 +54,23 @@ the active data directory for your installation.
    Copy-Item -Recurse hermes-skills\skills\independent-code-review $dest
    ```
 
-3. Verify that Hermes sees the skill:
+3. Verifique que o Hermes enxerga a skill:
 
    ```bash
    hermes skills list
    ```
 
-   The skill should appear with its category and an `enabled` status.
+   A skill deve aparecer com a sua categoria e o status `enabled`.
 
-## Updating a skill
+## Atualizando uma skill
 
-Replace the skill directory with the newer version from this repository and
-re-run `hermes skills list`. Keep the directory name identical to the skill
-`name` in the frontmatter.
+Substitua o diretório da skill pela versão mais nova deste repositório e execute
+`hermes skills list` novamente. Mantenha o nome do diretório idêntico ao `name`
+do frontmatter.
 
-## Uninstalling a skill
+## Desinstalando uma skill
 
-Delete the skill's directory from your skills tree:
+Apague o diretório da skill da sua árvore de skills:
 
 ```bash
 rm -rf "${HERMES_HOME:-$HOME/.hermes}/skills/software-development/independent-code-review"
@@ -80,11 +80,17 @@ rm -rf "${HERMES_HOME:-$HOME/.hermes}/skills/software-development/independent-co
 Remove-Item -Recurse "$env:LOCALAPPDATA\hermes\skills\software-development\independent-code-review"
 ```
 
-## Notes
+## Observações
 
-- Skills are scanned at session start. If you install a skill while a session
-  is open, start a new session (or reload) before expecting its slash command
-  to be registered.
-- No skill in this repository requires global configuration changes. Anything a
-  skill needs from your installation is declared in its own prerequisites
-  section.
+- As skills são lidas no início da sessão. Se você instalar uma skill com uma
+  sessão aberta, inicie uma sessão nova (ou recarregue) antes de esperar que o
+  comando de barra dela esteja registrado.
+- Nenhuma skill deste repositório exige alteração de configuração global. Tudo o
+  que uma skill precisa da sua instalação está declarado na seção de
+  pré-requisitos dela.
+
+## Próximos passos
+
+Depois de instalar, veja o [README principal](../README.md) para os exemplos de
+uso de cada skill e `docs/development.md` se você pretende escrever uma skill
+própria.

@@ -1,8 +1,9 @@
-# Development
+# Desenvolvimento
 
-How to write, structure, and version a skill that fits this repository.
+Como escrever, estruturar e versionar uma skill que se encaixa neste
+repositório.
 
-## Skill anatomy
+## Anatomia de uma skill
 
 ```
 skills/<skill-name>/
@@ -12,11 +13,12 @@ skills/<skill-name>/
 └── tests/        # optional, automated tests for scripts/
 ```
 
-If the skill ships scripts, the scripts go in `scripts/` and their tests go in
-`tests/`, using the standard library so a reader can run them without installing
-anything. See `docs/testing.md` for what those tests must satisfy.
+Se a skill entrega scripts, eles ficam em `scripts/` e os testes deles em
+`tests/`, usando a biblioteca padrão, para que qualquer leitor possa executá-los
+sem instalar nada. Veja `docs/testing.md` para saber o que esses testes precisam
+satisfazer.
 
-### `SKILL.md` frontmatter
+### Frontmatter do `SKILL.md`
 
 ```yaml
 ---
@@ -34,74 +36,108 @@ metadata:
 ---
 ```
 
-Rules that matter:
+Regras que importam:
 
-- **`name`** must equal the directory name. A mismatch breaks lookup.
-- **`description`** is the only thing the agent reads before deciding to load
-  the skill. Keep the first 57 characters self-contained: `Use when <trigger>.`
-  followed by a short behavioural phrase.
-- **`platforms`** lists what you tested. Omit anything untested. It is better to
-  under-claim than to claim support you cannot reproduce.
-- **`version`** is independent per skill. Bump it whenever behaviour changes.
+- **`name`** deve ser igual ao nome do diretório. Uma divergência quebra a
+  descoberta da skill.
+- **`description`** é a única coisa que o agente lê antes de decidir carregar a
+  skill. Mantenha os primeiros 57 caracteres autossuficientes: `Use when
+  <trigger>.` seguido de uma frase curta sobre o comportamento.
+- **`platforms`** lista o que você testou. Omita o que não foi testado. É melhor
+  declarar menos do que reivindicar um suporte que você não consegue reproduzir.
+- **`version`** é independente por skill. Incremente sempre que o comportamento
+  mudar.
 
-### Body structure
+### Estrutura do corpo
 
-A body that works well in practice has these sections, in this order:
+Um corpo que funciona bem na prática tem estas seções, nesta ordem:
 
-1. **One-paragraph summary** of what the skill does and its core principle.
-2. **When to Use** / **When NOT to use**.
-3. **Prerequisites**.
-4. **Quick Reference** — the handful of commands someone actually runs.
-5. **Procedure** — numbered steps, each ending in a completion criterion.
-6. **Pitfalls** — mistakes that were actually observed, stated as a rule plus
-   the reason.
-7. **Verification** — a checklist to confirm the skill did its job.
+1. **Resumo em um parágrafo** do que a skill faz e do seu princípio central.
+2. **Quando usar** e **quando não usar**.
+3. **Pré-requisitos**.
+4. **Referência rápida**: os poucos comandos que alguém realmente executa.
+5. **Procedimento**: passos numerados, cada um terminando em um critério de
+   conclusão.
+6. **Armadilhas**: erros que foram realmente observados, escritos como uma regra
+   mais o motivo.
+7. **Verificação**: um checklist para confirmar que a skill fez o trabalho dela.
 
-## Writing rules
+## Regras de escrita
 
-- **Write lessons, not logs.** State the rule and the reason. Do not narrate a
-  debugging session or reference issue numbers and dates in the body.
-- **Prefer exact commands over descriptions.** A command that was run and
-  worked beats a paragraph explaining the general idea.
-- **State the completion criterion per step.** If a step cannot fail, it is not
-  a step.
-- **Document version-dependent behavior as version-dependent.** If a behaviour
-  was validated against a specific Hermes CLI version, say so and instruct
-  re-validation when the CLI changes. Never present a validated behaviour as a
-  permanent API guarantee.
-- **Do not claim untested compatibility.** In the body, in the changelog, and
-  in `platforms`.
-- **No personal or private data.** No personal paths, usernames, machine names,
-  session IDs, tokens, or private repository names. Convert anything specific
-  into a clearly generic example.
-- **Keep it generic.** Another Hermes user must be able to run the skill as-is.
-  If a step depends on your environment, make that a prerequisite, not an
-  assumption.
-- **Keep emitted identifiers documented.** When a skill's code emits identifiers
-  that must appear in its documentation — finding IDs, exit codes, states, event
-  types — keep the two in sync, and consider adding an automated consistency
-  test so drift cannot go unnoticed. A hand-maintained table looks exhaustive
-  and drifts silently: `task-checkpoint-recovery` emitted `op_planned_landed`
-  while neither its schema table nor its README listed it. See `docs/testing.md`
-  for how to write that test.
+- **Escreva lições, não registros.** Declare a regra e o motivo. Não narre uma
+  sessão de depuração nem cite números de issue e datas no corpo.
+- **Prefira comandos exatos a descrições.** Um comando que foi executado e
+  funcionou vale mais do que um parágrafo explicando a ideia geral.
+- **Declare o critério de conclusão de cada passo.** Se um passo não pode
+  falhar, ele não é um passo.
+- **Documente comportamento dependente de versão como dependente de versão.** Se
+  um comportamento foi validado contra uma versão específica da CLI do Hermes,
+  diga isso e instrua a revalidação quando a CLI mudar. Nunca apresente um
+  comportamento validado como garantia permanente de API.
+- **Não afirme compatibilidade não testada.** Nem no corpo, nem no changelog,
+  nem em `platforms`.
+- **Nenhum dado pessoal ou privado.** Nada de caminhos pessoais, nomes de
+  usuário, nomes de máquina, IDs de sessão, tokens ou nomes de repositórios
+  privados. Converta qualquer coisa específica em um exemplo claramente
+  genérico.
+- **Mantenha tudo genérico.** Outro usuário do Hermes precisa conseguir executar
+  a skill como ela está. Se um passo depende do seu ambiente, transforme isso em
+  pré-requisito, não em suposição.
+- **Mantenha os identificadores emitidos documentados.** Quando o código de uma
+  skill emite identificadores que precisam aparecer na documentação (IDs de
+  achado, códigos de saída, estados, tipos de evento), mantenha os dois em
+  sincronia e considere adicionar um teste automatizado de consistência, para
+  que a divergência não passe despercebida. Uma tabela mantida à mão parece
+  completa e se desatualiza em silêncio: a skill `task-checkpoint-recovery`
+  emitia `op_planned_landed` enquanto nem a tabela do schema nem o README o
+  listavam. Veja `docs/testing.md` para saber como escrever esse teste.
+- **Mantenha os exemplos de uso atualizados.** Toda skill apresenta, na sua
+  documentação humana, pelo menos um exemplo simples de pedido em linguagem
+  natural, e uma mudança de comportamento atualiza os exemplos no mesmo pull
+  request.
 
-## Windows support
+## Idioma da documentação
 
-A skill may be declared `windows`-only. If a skill works on multiple platforms,
-say so only after running it on each. When a procedure differs per shell,
-show both a POSIX form and a PowerShell form rather than assuming Bash.
+Regra permanente do repositório. Ela vale para toda contribuição nova ou
+existente.
 
-## Versioning and changelog
+- O `README.md` da raiz é mantido em **português brasileiro (PT-BR)**.
+- Todo `README.md` de skill é escrito e atualizado em PT-BR.
+- Toda nova skill deve apresentar pelo menos um **exemplo simples de uso em
+  linguagem natural**, curto e pronto para copiar e colar no Hermes.
+- Mudanças de funcionalidade atualizam os exemplos correspondentes no mesmo pull
+  request.
+- Os textos explicativos priorizam clareza e acessibilidade, sem sacrificar a
+  precisão técnica.
+- Nomes de comandos, APIs, parâmetros, caminhos, estruturas JSON e
+  identificadores técnicos permanecem **inalterados**. Não traduza código nem
+  identificadores.
+- URLs, âncoras, links relativos, comandos válidos e informações sobre
+  plataformas realmente testadas são preservados.
+- Os arquivos `SKILL.md` e as demais instruções internas dos agentes podem
+  continuar em inglês quando isso for mais apropriado para compatibilidade,
+  descoberta e execução. A obrigação de PT-BR vale para a **documentação
+  humana**: o `README.md` da raiz, os `README.md` das skills e os guias em
+  `docs/`.
 
-- Use [Semantic Versioning](https://semver.org/): `MAJOR` for a breaking change
-  to the procedure or its interface, `MINOR` for new capability, `PATCH` for
-  corrections that do not change behaviour.
-- Add an entry to the repository `CHANGELOG.md` under `Unreleased`, then move it
-  to a released version when the change is merged.
-- One skill, one directory, one version. Do not version a group of skills
-  together.
+## Suporte a Windows
 
-## Branch and pull request
+Uma skill pode ser declarada exclusiva para `windows`. Se uma skill funciona em
+várias plataformas, diga isso apenas depois de executá-la em cada uma. Quando um
+procedimento difere por shell, mostre a forma POSIX e a forma PowerShell, em vez
+de presumir Bash.
+
+## Versionamento e changelog
+
+- Use [Semantic Versioning](https://semver.org/): `MAJOR` para uma mudança que
+  quebra o procedimento ou a interface, `MINOR` para capacidade nova, `PATCH`
+  para correções que não mudam o comportamento.
+- Adicione uma entrada ao `CHANGELOG.md` do repositório em `Unreleased` e mova-a
+  para uma versão publicada quando a mudança for integrada.
+- Uma skill, um diretório, uma versão. Não versione um grupo de skills em
+  conjunto.
+
+## Branch e pull request
 
 ```bash
 git checkout -b feat/<skill-name>
@@ -112,5 +148,6 @@ git push -u origin HEAD
 gh pr create --title "Add <skill-name> skill" --fill
 ```
 
-Never push directly to `main`. Every skill change is proposed through a pull
-request and reviewed independently before merge (see `docs/testing.md`).
+Nunca faça push direto na `main`. Toda mudança em uma skill é proposta por um
+pull request e revisada de forma independente antes do merge (veja
+`docs/testing.md`).
