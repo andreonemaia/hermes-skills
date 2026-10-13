@@ -35,6 +35,12 @@ each skill is the `version` field in its own `SKILL.md`.
   server's `/object_info`. Standard-library only; ships a `unittest` suite.
   Complements the official `comfyui` skill. Tested on Windows.
 
+### Changed
+
+- Repository docs: `docs/development.md` now requires the identifiers a skill's
+  code emits to stay in sync with its documentation, and `docs/testing.md`
+  documents how to test that consistency.
+
 ## [1.0.0] - 2026-10-05
 
 ### Added

@@ -77,6 +77,13 @@ A body that works well in practice has these sections, in this order:
 - **Keep it generic.** Another Hermes user must be able to run the skill as-is.
   If a step depends on your environment, make that a prerequisite, not an
   assumption.
+- **Keep emitted identifiers documented.** When a skill's code emits identifiers
+  that must appear in its documentation — finding IDs, exit codes, states, event
+  types — keep the two in sync, and consider adding an automated consistency
+  test so drift cannot go unnoticed. A hand-maintained table looks exhaustive
+  and drifts silently: `task-checkpoint-recovery` emitted `op_planned_landed`
+  while neither its schema table nor its README listed it. See `docs/testing.md`
+  for how to write that test.
 
 ## Windows support
 
