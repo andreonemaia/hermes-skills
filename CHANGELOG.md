@@ -10,6 +10,16 @@ each skill is the `version` field in its own `SKILL.md`.
 
 ### Added
 
+- `task-checkpoint-recovery` skill (0.1.0): persist the logical/operational state
+  of a long-running task (objective, steps, decisions, blockers, next actions,
+  and a ledger of effect-carrying operations) to
+  `<project>/.hermes/checkpoints/<task-slug>/`, and revalidate it against reality
+  before resuming (`verify`, `resume-report`), so an interrupted task can be
+  resumed without losing decisions or repeating work already done. Includes a
+  compare-and-swap revision guard, a lock with timeout, atomic writes, quarantine
+  of corrupted checkpoints, and a `--now` override for deterministic tests.
+  Standard-library only; ships a `unittest` suite. Complements native sessions,
+  file checkpoints and context compaction. Tested on Windows.
 - `comfyui-model-manager` skill (0.1.0): discover a ComfyUI installation,
   inventory the model files on disk, verify a SHA-256 manifest against them,
   and fetch only the missing or corrupted entries (dry run by default). Also
