@@ -92,8 +92,8 @@ pruned); `--dry-run` reports what would be removed.
 
 | Code | Name | Meaning |
 |---|---|---|
-| 0 | `EXIT_OK` | success |
-| 1 | `EXIT_DRIFT` | findings, a stale `--expect-revision`, or "do not repeat" from `check-op` |
+| 0 | `EXIT_OK` | success; for `verify`, no actionable finding (benign ones may still be reported) |
+| 1 | `EXIT_DRIFT` | findings, any finding under `--strict`, a stale `--expect-revision`, or "do not repeat" from `check-op` |
 | 2 | `EXIT_CORRUPT` | corrupt/unreadable checkpoint, unknown state |
 | 3 | `EXIT_MISSING` | missing target, unresolved failure |
 | 4 | `EXIT_USAGE` | invalid usage, refused secret, unsafe path |

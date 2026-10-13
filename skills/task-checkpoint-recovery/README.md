@@ -66,8 +66,8 @@ python scripts/checkpoint.py --project /path/to/repo check-op --task my-task --k
 
 | Code | Name | Meaning |
 |---|---|---|
-| 0 | `EXIT_OK` | success, no findings |
-| 1 | `EXIT_DRIFT` | findings (drift, staleness), a stale `--expect-revision`, or "do not repeat" from `check-op` |
+| 0 | `EXIT_OK` | success; for `verify`, no actionable finding (benign ones may still be reported) |
+| 1 | `EXIT_DRIFT` | findings (drift, staleness), any finding under `--strict`, a stale `--expect-revision`, or "do not repeat" from `check-op` |
 | 2 | `EXIT_CORRUPT` | corrupt/unreadable checkpoint, or a state that cannot be confirmed |
 | 3 | `EXIT_MISSING` | missing target, or an unresolved failure needing a decision |
 | 4 | `EXIT_USAGE` | invalid usage: unknown kind/state, refused secret, unsafe path |
