@@ -43,7 +43,11 @@ def _digest_problems(root, data):
             continue
         recorded = item.get("sha256")
         if recorded:
-            actual = C.sha256_file(target)
+            try:
+                actual = C.sha256_file(target)
+            except OSError as exc:
+                problems.append("files path %r cannot be hashed: %s" % (rel, exc))
+                continue
             if actual != recorded:
                 problems.append(
                     "files path %r digest mismatch (recorded %s..., on disk %s...)"
@@ -75,6 +79,14 @@ def validate_task(root, slug, digests=False):
             problems.append("invalid JSON: %s" % exc)
         except OSError as exc:
             problems.append("cannot read: %s" % exc)
+
+    if data is not None and not isinstance(data, dict):
+        # A JSON payload that is a list, string or number would blow up in
+        # ``validate_checkpoint`` with AttributeError: call it corrupt instead.
+        problems.append(
+            "checkpoint.json is not a JSON object (found %s)" % type(data).__name__
+        )
+        data = None
 
     if data is not None:
         problems += list(C.validate_checkpoint(data))
@@ -124,7 +136,7 @@ def discover(root, task=None):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = C.UsageArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--project", default=".", help="project root (default: .)")
     parser.add_argument("--task", help="validate only this task slug")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
@@ -133,7 +145,15 @@ def main(argv=None):
         action="store_true",
         help="also recompute the sha256 of every recorded file",
     )
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        # argparse exits directly for --help and usage errors; report the code
+        # instead of letting SystemExit escape a function returning an int.
+        code = exc.code
+        if code is None:
+            return C.EXIT_OK
+        return code if isinstance(code, int) else C.EXIT_USAGE
 
     root = os.path.abspath(args.project)
     try:
@@ -153,7 +173,7 @@ def main(argv=None):
     for slug in slugs:
         try:
             results.append(validate_task(root, slug, args.digests))
-        except C.CheckpointError as exc:
+        except (C.CheckpointError, OSError) as exc:
             results.append(
                 {"task": slug, "ok": False, "problems": ["cannot validate: %s" % exc]}
             )

@@ -7,6 +7,7 @@ the ``TCR_NOW`` clock override used by the test suite.
 
 from __future__ import annotations
 
+import argparse
 import datetime
 import hashlib
 import json
@@ -14,6 +15,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 SCHEMA_ID = "task-checkpoint/v1"
@@ -24,6 +26,18 @@ EXIT_DRIFT = 1
 EXIT_CORRUPT = 2
 EXIT_MISSING = 3
 EXIT_USAGE = 4
+
+
+class UsageArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser whose usage errors exit with EXIT_USAGE (4).
+
+    argparse's default is 2, which collides with EXIT_CORRUPT in these CLIs;
+    the documented contract is 4 for every usage problem.
+    """
+
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_USAGE, "%s: error: %s\n" % (self.prog, message))
 
 HISTORY_KEEP_DEFAULT = 20
 STALE_AFTER_SECONDS_DEFAULT = 24 * 3600
@@ -75,7 +89,13 @@ DENY_VALUE_RES = (
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\."),
     re.compile(r"(?i)\b(api[_-]?key|token|password|secret|passwd)\s*[:=]\s*\S{6,}"),
 )
-ENV_DUMP_RE = re.compile(r"(?m)^\s*[A-Z][A-Z0-9_]{2,}\s*=\s*\S+")
+# A line that looks like a shell environment dump: one or more ``NAME=value``
+# pairs filling the whole line. Requiring the line to end right after the pairs
+# keeps prose such as "GPU=90% during the load test" from being flagged as a
+# leaked environment.
+ENV_DUMP_RE = re.compile(
+    r"(?m)^\s*[A-Z][A-Z0-9_]{2,}\s*=\s*\S+(?:\s+[A-Z][A-Z0-9_]{2,}\s*=\s*\S+)*\s*$"
+)
 
 
 class CheckpointError(Exception):
@@ -103,11 +123,14 @@ class LockTimeout(CheckpointError):
 # --------------------------------------------------------------------------
 
 def parse_timestamp(value: str) -> str:
-    """Return ``value`` unchanged when it is a usable timestamp, else raise.
+    """Return a usable timestamp as ISO-8601, else raise.
 
     Accepts ISO-8601 (offset optional) and bare epoch seconds: both shapes the
-    CLI advertises. Everything else is refused here, so an unusable ``--now``
-    or ``TCR_NOW`` never reaches the store as an unparseable timestamp.
+    CLI advertises. A bare epoch is normalised to UTC ISO-8601 so everything
+    that reaches the store is readable back as ISO-8601; echoing it verbatim
+    let ``--now <epoch>`` freeze the clock and silently disable staleness
+    detection. Everything else is refused here, so an unusable ``--now`` or
+    ``TCR_NOW`` never reaches the store as an unparseable timestamp.
     """
     if not isinstance(value, str) or not value.strip():
         raise ValueError("timestamp must be a non-empty ISO-8601 string")
@@ -118,13 +141,21 @@ def parse_timestamp(value: str) -> str:
     except ValueError:
         pass
     try:
-        float(text)
+        seconds = float(text)
     except ValueError:
         raise ValueError(
             "invalid timestamp %r: expected ISO-8601 "
             "(e.g. 2026-10-13T12:00:00-03:00)" % value
         )
-    return value
+    if seconds != seconds or seconds in (float("inf"), float("-inf")):
+        raise ValueError("invalid timestamp %r: not a finite number" % value)
+    try:
+        return datetime.datetime.fromtimestamp(seconds, datetime.timezone.utc).isoformat()
+    except (OverflowError, OSError):
+        # ``fromtimestamp`` raises OverflowError/OSError, not ValueError, for an
+        # epoch outside the platform's time_t range: report a usage error so the
+        # CLI exits 4 instead of escaping with a traceback.
+        raise ValueError("invalid timestamp %r: out of range" % value)
 
 
 def now_iso(now: str | None = None) -> str:
@@ -134,7 +165,10 @@ def now_iso(now: str | None = None) -> str:
     override = os.environ.get("TCR_NOW")
     if override:
         return parse_timestamp(override)
-    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    # ``time.strftime("%z")`` is not portable: Windows yields the timezone
+    # *name* and POSIX yields ``+0000``, which ``datetime.fromisoformat``
+    # cannot read back. Build an offset-aware ISO-8601 stamp instead.
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def now_epoch() -> float:
@@ -210,6 +244,11 @@ def safe_relpath(root: str, rel: str, must_exist: bool = False) -> str:
     norm = os.path.normpath(rel).replace("\\", "/")
     if norm in (".", "") or norm.startswith("../") or norm == ".." or "/../" in norm:
         raise SecurityError("path escapes the project root: %r" % (rel,))
+    if ":" in norm:
+        # A colon anywhere else is either a drive-relative path (``c:file``) or
+        # an NTFS alternate data stream (``file.txt:secret``). Neither is a
+        # normal repository path, so refuse instead of recording it.
+        raise SecurityError("colons are not allowed in paths: %r" % (rel,))
 
     abs_root = os.path.realpath(os.path.abspath(root))
     target = os.path.join(abs_root, norm)
@@ -247,6 +286,17 @@ def relative_to_root(root: str, path: str) -> str:
 # privacy
 # --------------------------------------------------------------------------
 
+def looks_like_env_dump(text: str) -> bool:
+    """True when ``text`` looks like a dumped environment block.
+
+    A single ``KEY=value`` line is ordinary prose ("GPU=90% during the load
+    test"), while a dumped environment carries several assignments. Requiring
+    at least two removes that false positive without losing real dumps; a lone
+    secret assignment is still caught by ``DENY_VALUE_RES``.
+    """
+    return len(ENV_DUMP_RE.findall(text)) >= 2
+
+
 def scan_secrets(value, path: str = "$") -> list[str]:
     """Return findings for anything that must never be persisted."""
     findings: list[str] = []
@@ -265,7 +315,7 @@ def scan_secrets(value, path: str = "$") -> list[str]:
                 if rx.search(node):
                     findings.append("secret-looking value matching %s at %s" % (rx.pattern[:28], where))
                     break
-            if ENV_DUMP_RE.search(node):
+            if looks_like_env_dump(node):
                 findings.append("environment-variable dump (potential secrets) at %s" % where)
             if len(node) > MAX_TEXT:
                 findings.append("value too long (%d > %d) at %s" % (len(node), MAX_TEXT, where))
@@ -357,10 +407,21 @@ class FileLock:
 
     def _reclaim_if_stale(self) -> bool:
         try:
-            age = time.time() - os.path.getmtime(self.path)
+            first = os.stat(self.path)
         except OSError:
             return True
-        if age <= self.stale_after:
+        if time.time() - first.st_mtime <= self.stale_after:
+            return False
+        # Re-read the identity right before removing it: the holder may have
+        # released the lock and a new owner created its own in the meantime, and
+        # that fresh lock must not be stolen.
+        try:
+            second = os.stat(self.path)
+        except OSError:
+            return True
+        if (first.st_ino, first.st_mtime, first.st_size) != (
+            second.st_ino, second.st_mtime, second.st_size
+        ):
             return False
         try:
             os.unlink(self.path)
@@ -412,6 +473,7 @@ def git_run(root: str, *args: str, timeout: float = 20.0):
         proc = subprocess.run(
             ["git", "-C", root, *args],
             capture_output=True, text=True, timeout=timeout, check=False,
+            encoding="utf-8", errors="replace",
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return 128, "", str(exc)
@@ -469,7 +531,6 @@ def git_state(root: str, stale_after: float = STALE_AFTER_SECONDS_DEFAULT) -> di
             parts = counts.split()
             if len(parts) == 2:
                 state["behind"], state["ahead"] = int(parts[0]), int(parts[1])
-    state["stale_after"] = stale_after
     return state
 
 
@@ -668,7 +729,17 @@ def quarantine(path: str, reason: str) -> str:
     try:
         os.replace(path, target)
     except OSError:
-        pass
+        # The move failed: copy instead, so the corrupt bytes are preserved
+        # before the caller writes a fresh checkpoint over ``path``. If even
+        # that fails, say so loudly rather than reporting a clean quarantine.
+        try:
+            shutil.copyfile(path, target)
+        except OSError as exc:
+            print(
+                "warning: could not quarantine %s (%s); the corrupt file is "
+                "still in place" % (os.path.basename(path), exc),
+                file=sys.stderr,
+            )
     return target
 
 

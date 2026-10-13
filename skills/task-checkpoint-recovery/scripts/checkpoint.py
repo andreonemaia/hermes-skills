@@ -14,7 +14,7 @@ Usage examples
 Exit codes (save/show/list/prune/record-op/check-op/verify/resume-report):
     0 consistent / recorded        1 findings require review
     2 corrupt or refused           3 checkpoint not found
-    4 usage or security error
+    4 usage, security or lock error (argparse usage errors included)
 ``check-op`` additionally uses 0 to proceed, 1 already done, 2 unknown, 3 failed.
 """
 
@@ -327,6 +327,10 @@ def cmd_save(args) -> int:
         for note in args.note or []:
             cp["notes"] = list(cp.get("notes") or []) + [note]
 
+        # Snapshot the repository once, before classifying files: the previous
+        # checkpoint's ``repo`` describes an older tree and would misclassify a
+        # tracked file as ``created`` whenever that snapshot said unavailable.
+        repo_now = C.git_state(root)
         for rel in args.file or []:
             norm = C.safe_relpath(root, rel)
             abspath = os.path.join(root, norm)
@@ -335,7 +339,7 @@ def cmd_save(args) -> int:
             if os.path.isfile(abspath):
                 digest = C.sha256_file(abspath)
                 state = "modified"
-                if cp["repo"].get("available") and C.git_available():
+                if repo_now.get("available") and C.git_available():
                     rc, _, _ = C.git_run(root, "ls-files", "--error-unmatch", norm)
                     if rc != 0:
                         state = "created"
@@ -346,7 +350,7 @@ def cmd_save(args) -> int:
 
         repo_before = cp["repo"]
         # Only schema-approved fields are persisted (adjustment 5).
-        cp["repo"] = {k: v for k, v in C.git_state(root).items() if k in C.ALLOWED_REPO}
+        cp["repo"] = {k: v for k, v in repo_now.items() if k in C.ALLOWED_REPO}
         cp["repo"]["root"] = "."
         if not cp["repo"]["available"]:
             cp["repo"]["remote_head"] = None
@@ -441,6 +445,11 @@ def verify_operation(root: str, entry: dict, offline: bool) -> tuple[str, str]:
             return "unknown", "no local ref %s to compare against" % ref
         if local_sha and remote_sha == local_sha:
             return "verified", "%s/%s = %s" % (remote, ref, remote_sha[:12])
+        if local_sha and C.git_is_ancestor(root, remote_sha, local_sha) is True:
+            # The remote ref is behind the local one but contains this commit:
+            # later local commits do not undo a push that already landed.
+            return "verified", "%s/%s = %s is contained in local %s" % (
+                remote, ref, remote_sha[:12], local_sha[:12])
         return "failed", "%s/%s is %s, local %s" % (remote, ref, remote_sha[:12], (local_sha or "?")[:12])
     if kind in ("pr", "merge"):
         if offline:
@@ -454,7 +463,8 @@ def verify_operation(root: str, entry: dict, offline: bool) -> tuple[str, str]:
             proc = subprocess.run(
                 ["gh", "pr", "list", "--head", branch, "--state", "all",
                  "--json", "number,state,url"],
-                capture_output=True, text=True, timeout=30, check=False)
+                capture_output=True, text=True, timeout=30, check=False,
+                cwd=root)
         except (OSError, subprocess.SubprocessError) as exc:
             return "unknown", "gh failed: %s" % exc
         if proc.returncode != 0:
@@ -490,13 +500,19 @@ def _verify_ops(root: str, events: list[dict], offline: bool) -> tuple[list[dict
     claims = C.current_ops(events)
     for op_id, entry in sorted(claims.items()):
         recorded = entry.get("state")
-        if recorded == "planned":
-            findings.append({"id": "op_planned", "severity": "info",
-                             "message": "%s is planned but never started" % op_id})
-            continue
         live, detail = verify_operation(root, entry, offline)
         entry["live_state"] = live
         entry["live_detail"] = detail
+        if recorded == "planned":
+            if live == "verified":
+                findings.append({"id": "op_planned_landed", "severity": "warning",
+                                 "message": "%s was still recorded as planned but reality confirms "
+                                            "it is done (%s): record it and do not repeat the work"
+                                            % (op_id, detail)})
+            else:
+                findings.append({"id": "op_planned", "severity": "info",
+                                 "message": "%s is planned but never started" % op_id})
+            continue
         if live == "verified":
             if recorded != "verified":
                 findings.append({"id": "op_completed_unrecorded", "severity": "info",
@@ -587,6 +603,12 @@ def _timestamp_epoch(text: str) -> float:
     try:
         return datetime.datetime.fromisoformat(text).timestamp()
     except ValueError:
+        pass
+    try:
+        # A store written before bare epochs were normalised to ISO-8601 may
+        # still hold one; read it back instead of dating the checkpoint to 1970.
+        return float(text)
+    except (TypeError, ValueError):
         return 0.0
 
 
@@ -785,13 +807,18 @@ def cmd_record_op(args) -> int:
         return _fail(C.EXIT_USAGE, "unknown kind %r (expected %s)" % (args.kind, sorted(C.OP_KINDS)))
     if args.state not in C.OP_STATES:
         return _fail(C.EXIT_USAGE, "unknown state %r (expected %s)" % (args.state, sorted(C.OP_STATES)))
+    if not args.op_id and not args.target:
+        # Otherwise the id collapses to ``kind:?`` and every operation of this
+        # kind overwrites the previous one in the ledger.
+        return _fail(C.EXIT_USAGE, "--op-id or --target is required for kind %r" % (args.kind,))
+    now = C.now_iso(args.now)
     store = C.store_dir(root, slug)
     os.makedirs(store, exist_ok=True)
     event = {
-        "op_id": args.op_id or ("%s:%s" % (args.kind, args.target or "?")),
+        "op_id": args.op_id or ("%s:%s" % (args.kind, args.target)),
         "kind": args.kind, "state": args.state, "target": args.target,
         "detail": args.detail, "verification": args.verification,
-        "at": C.now_iso(args.now),
+        "at": now,
     }
     try:
         C.assert_no_secrets(event, "$.operation")
@@ -804,11 +831,20 @@ def cmd_record_op(args) -> int:
         if os.path.exists(cp_path):
             try:
                 cp, _, _ = _load(root, slug)
+                previous = copy.deepcopy(cp)
                 cp["operations_summary"] = C.ops_summary(events)
+                # The ledger changed, so the checkpoint changed: bump the
+                # revision and keep the previous version in history exactly as
+                # ``save`` does, so a concurrent writer sees the drift.
+                cp["revision"] = int(cp.get("revision", 1)) + 1
+                cp["task"]["updated_at"] = now
+                _write_history(root, slug, previous, cp)
                 C.atomic_write_json(cp_path, cp)
                 C.atomic_write_text(C.markdown_path(root, slug), render_markdown(cp))
-            except C.CorruptCheckpoint:
-                pass
+            except C.CorruptCheckpoint as exc:
+                print("warning: checkpoint.json is corrupt (%s); the operation was "
+                      "recorded in the ledger but the checkpoint was not updated" % exc,
+                      file=sys.stderr)
     print(json.dumps({"recorded": appended, "summary": C.ops_summary(events)}, ensure_ascii=False, indent=2))
     print("note: this is a claim; revalidate before treating %s as complete" % appended["op_id"],
           file=sys.stderr)
@@ -819,7 +855,11 @@ def cmd_check_op(args) -> int:
     """Decide whether an effect-carrying operation may run."""
     root = os.path.abspath(args.project)
     slug = C.validate_slug(args.task)
-    op_id = args.op_id or ("%s:%s" % (args.kind, args.target or "?"))
+    if not args.op_id and not args.target:
+        # The ledger id must be reproducible: without either, the lookup would
+        # silently miss every entry that was recorded with an explicit id.
+        return _fail(C.EXIT_USAGE, "--op-id or --target is required for kind %r" % (args.kind,))
+    op_id = args.op_id or ("%s:%s" % (args.kind, args.target))
     claims = C.current_ops(C.read_ops(root, slug))
     entry = claims.get(op_id)
     if entry is None:
@@ -945,7 +985,7 @@ def _fail(code: int, message: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = C.UsageArgumentParser(
         prog="checkpoint.py",
         description="Structured, revalidated checkpoints for long-running agent tasks.")
     parser.add_argument("--project", default=".", help="project root (default: current directory)")
@@ -1034,7 +1074,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        # argparse exits directly for --help and for usage errors; report the
+        # code to the caller instead of letting SystemExit escape a function
+        # that returns an int (tests call main() directly).
+        code = exc.code
+        if code is None:
+            return C.EXIT_OK
+        return code if isinstance(code, int) else C.EXIT_USAGE
     if getattr(args, "expect_revision", None) is not None and args.expect_revision < 0:
         return _fail(C.EXIT_USAGE, "--expect-revision must be >= 0")
     if getattr(args, "keep", None) is not None and args.keep < 0:
@@ -1060,6 +1109,10 @@ def main(argv=None) -> int:
         return _fail(C.EXIT_DRIFT, str(exc))
     except ValueError as exc:
         return _fail(C.EXIT_USAGE, str(exc))
+    except OSError as exc:
+        # Permissions, a missing git/gh binary, a full disk: report the run as
+        # refused instead of escaping main with a traceback.
+        return _fail(C.EXIT_CORRUPT, "cannot complete: %s" % exc)
     except KeyboardInterrupt:  # pragma: no cover
         return 130
 
