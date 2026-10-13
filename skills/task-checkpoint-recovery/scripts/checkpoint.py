@@ -589,9 +589,20 @@ def _timestamp_epoch(text: str) -> float:
         return 0.0
 
 
-def _collect_findings(root: str, cp: dict, offline: bool, stale_after: float):
+def _now_epoch(args) -> float:
+    """Epoch seconds for ``--now``; falls back to the clock (or ``TCR_EPOCH``)."""
+    override = getattr(args, "now", None)
+    if override:
+        return _timestamp_epoch(override)
+    return C.now_epoch()
+
+
+def _collect_findings(root: str, cp: dict, offline: bool, stale_after: float,
+                      now_epoch: float | None = None):
     """Return (findings, events, claims) for one checkpoint."""
-    findings = _drift_findings(root, cp, C.now_epoch(), stale_after)
+    if now_epoch is None:
+        now_epoch = C.now_epoch()
+    findings = _drift_findings(root, cp, now_epoch, stale_after)
     events = C.read_ops(root, cp["task"]["id"])
     events, op_findings, claims = _verify_ops(root, events, offline)
     findings.extend(op_findings)
@@ -643,7 +654,8 @@ def cmd_verify(args) -> int:
     except C.CorruptCheckpoint as exc:
         return _fail(C.EXIT_CORRUPT, str(exc))
 
-    findings, events, claims = _collect_findings(root, cp, args.offline, args.stale_after)
+    findings, events, claims = _collect_findings(root, cp, args.offline, args.stale_after,
+                                                 now_epoch=_now_epoch(args))
     payload = {
         "task": slug, "revision": cp.get("revision"), "source": origin,
         "checkpoint_path": C.relative_to_root(root, path),
@@ -676,7 +688,8 @@ def cmd_resume_report(args) -> int:
     except C.CorruptCheckpoint as exc:
         return _fail(C.EXIT_CORRUPT, str(exc))
 
-    findings, events, claims = _collect_findings(root, cp, args.offline, args.stale_after)
+    findings, events, claims = _collect_findings(root, cp, args.offline, args.stale_after,
+                                                 now_epoch=_now_epoch(args))
     task = cp.get("task", {})
     by_sev = {sev: [f for f in findings if f["severity"] == sev] for sev in SEVERITY_ORDER}
 
@@ -777,6 +790,7 @@ def cmd_record_op(args) -> int:
         "op_id": args.op_id or ("%s:%s" % (args.kind, args.target or "?")),
         "kind": args.kind, "state": args.state, "target": args.target,
         "detail": args.detail, "verification": args.verification,
+        "at": C.now_iso(args.now),
     }
     try:
         C.assert_no_secrets(event, "$.operation")
