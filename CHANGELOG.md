@@ -8,6 +8,14 @@ each skill is the `version` field in its own `SKILL.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- `task-checkpoint-recovery` documentation aligned with the implementation: a stale
+  `--expect-revision` exits 1 (`EXIT_DRIFT`), not 3; `verify` fails the run on every
+  non-benign finding (not only with `--strict`); the resume prompt names the skill
+  directory the commands must run from; the `README.md` file list names all four test
+  modules.
+
 ### Added
 
 - `task-checkpoint-recovery` skill (0.1.0): persist the logical/operational state

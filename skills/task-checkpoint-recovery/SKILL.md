@@ -126,8 +126,9 @@ Fields: `--status`, `--step`, `--step-status`, `--step-evidence`, `--decision`,
 `--blocker ID=WHAT[|NEEDS]`, `--next ID=ACTION`, `--next-open ID` (the action does not
 need approval), `--check "COMMAND|EXIT"`, `--note`, `--file RELATIVE_PATH`.
 
-Use `--expect-revision N` when another writer may be active: the save fails with exit 3
-instead of silently clobbering a newer revision.
+Use `--expect-revision N` when another writer may be active: the save fails with exit 1
+(`EXIT_DRIFT`, the same code a drifted checkpoint produces) instead of silently clobbering
+a newer revision.
 
 ### 3. Before repeating an effect-carrying operation, ask
 
@@ -153,7 +154,9 @@ python scripts/checkpoint.py --project . resume-report --task my-task
 ```
 
 `verify` compares the checkpoint against the project and prints findings. Findings are
-`critical` / `warning` / `info`; `--strict` also fails on `info`. `--stale-after`
+`critical` / `warning` / `info`. Every finding except the benign ones (`git_unavailable`,
+`op_planned`, `op_completed_unrecorded`) fails the run with exit 1; `--strict` also fails on
+those three. `--stale-after`
 (default 24h) controls when a checkpoint counts as `stale_checkpoint`.
 
 `resume-report` is the entry point for a fresh session: it reports the state, the
@@ -171,11 +174,11 @@ python scripts/checkpoint.py --project . prune --task my-task --keep 20
 
 Paste this into the new session (or reference the skill and the task slug):
 
-> Resume task `<slug>` in `<project root>`. Run
+> Resume task `<slug>` in `<project root>`. From the skill directory (`cd <skill dir>`), run
 > `python scripts/checkpoint.py --project <root> verify --task <slug> --json` and
-> `resume-report`, then continue from the reported next actions. Before any
-> push/PR/merge/download, run `check-op` for that operation and respect its decision.
-> Update the checkpoint with `save` after each step.
+> `python scripts/checkpoint.py --project <root> resume-report --task <slug>`, then continue
+> from the reported next actions. Before any push/PR/merge/download, run `check-op` for that
+> operation and respect its decision. Update the checkpoint with `save` after each step.
 
 ## Storage layout
 
@@ -197,7 +200,7 @@ overwritten: it is quarantined only once a valid history snapshot exists to fall
 - [ ] `save` exits 0 and `show --task <slug>` shows the expected revision and steps.
 - [ ] `verify --task <slug> --json` exits 0 on a clean project; exit 1 with findings when
       the tree is dirty or the checkpoint is stale.
-- [ ] A second `save` with `--expect-revision <old>` exits 3 (no silent clobber).
+- [ ] A second `save` with `--expect-revision <old>` exits 1 (`EXIT_DRIFT`), not 0: no silent clobber.
 - [ ] `check-op` returns `proceed` (0) with no ledger entry, and "do not repeat" (1)
       after a verified `record-op`.
 - [ ] `resume-report` on a fresh clone of the state names the next action, not the whole task.
