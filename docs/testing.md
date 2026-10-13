@@ -1,15 +1,16 @@
-# Testing and validation
+# Testes e validação
 
-What to check before a skill is published, and how this repository validates a
-change.
+O que verificar antes de publicar uma skill e como este repositório valida uma
+mudança.
 
-## Pre-publication checklist
+## Checklist de pré-publicação
 
-Run this on every skill you add or change.
+Execute isto em toda skill que você adicionar ou alterar.
 
 ### 1. Frontmatter
 
-Parse the YAML and confirm the required keys exist and are well-formed:
+Faça o parse do YAML e confirme que as chaves obrigatórias existem e estão bem
+formadas:
 
 ```bash
 python - <<'PY'
@@ -29,19 +30,19 @@ for p in pathlib.Path("skills").rglob("SKILL.md"):
 PY
 ```
 
-Checks performed: `name`, `description`, `version`, `platforms`,
-`metadata.hermes.tags`, `metadata.hermes.category`, and `name == directory`.
+Verificações realizadas: `name`, `description`, `version`, `platforms`,
+`metadata.hermes.tags`, `metadata.hermes.category` e `name == directory`.
 
 ### 2. Markdown
 
-- Headings are ordered and not skipped.
-- Code fences are balanced and language-tagged.
-- Relative link targets resolve to a file that exists in the repository.
-- Tables render (consistent pipe counts per row).
+- Os títulos estão em ordem e nenhum nível foi pulado.
+- Os blocos de código estão balanceados e identificados com a linguagem.
+- Os alvos de links relativos resolvem para um arquivo que existe no repositório.
+- As tabelas renderizam (número de colunas consistente em cada linha).
 
-### 3. Secrets and personal data
+### 3. Segredos e dados pessoais
 
-Grep the whole skill for anything that must not be published:
+Faça uma busca em toda a skill por qualquer coisa que não deva ser publicada:
 
 ```bash
 # Personal paths and usernames (adapt the patterns to your environment)
@@ -52,96 +53,118 @@ rg -n -i 'api[_-]?key|token|secret|password|BEGIN [A-Z ]*PRIVATE KEY|ghp_|gho_|s
 rg -n -i 'session[_-]?id|internal\.|\.corp|10\.|192\.168\.' skills/
 ```
 
-Every hit is either removed or converted into a clearly generic example. A
-secret is never "probably fine".
+Todo resultado é removido ou convertido em um exemplo claramente genérico. Um
+segredo nunca é "provavelmente aceitável".
 
-### 4. Platform honesty
+### 4. Honestidade sobre plataformas
 
-For every platform in `platforms`, confirm the skill was actually run there.
-Remove any platform that was not tested. Also scan the body and the changelog
-for sentences that imply untested compatibility.
+Para cada plataforma em `platforms`, confirme que a skill foi realmente executada
+nela. Remova qualquer plataforma que não foi testada. Faça também uma leitura do
+corpo e do changelog procurando frases que insinuem compatibilidade não testada.
 
-### 5. Genericity
+### 5. Generalidade
 
-Read the skill as if you were a different Hermes user on a clean machine. Any
-step that only works because of your local setup must become a documented
-prerequisite.
+Leia a skill como se você fosse outro usuário do Hermes em uma máquina limpa.
+Qualquer passo que só funciona por causa da sua configuração local deve virar um
+pré-requisito documentado.
 
-### 6. Consistency between `README.md` and `SKILL.md`
+### 6. Consistência entre `README.md` e `SKILL.md`
 
-The skill README explains the same behaviour as `SKILL.md`, without duplicating
-it wholesale. If the version or the commands differ between the two files, the
-skill is wrong.
+O README da skill explica o mesmo comportamento que o `SKILL.md`, sem duplicá-lo
+por inteiro. Se a versão ou os comandos divergirem entre os dois arquivos, a
+skill está errada.
 
-### 7. Automated tests
+### 7. Testes automatizados
 
-A skill that ships scripts should ship tests for them, in the skill's own
-`tests/` directory, using the standard library (`unittest`) so that running them
-needs no dependency install:
+Uma skill que entrega scripts deve entregar testes para eles, no diretório
+`tests/` da própria skill, usando a biblioteca padrão (`unittest`), de modo que
+executá-los não exija instalar nenhuma dependência:
 
 ```bash
 cd skills/<skill-name>
 python -m unittest discover -s tests -t tests
 ```
 
-Requirements:
+Requisitos:
 
-- **No network and no live service.** Anything that would reach out is stubbed
-  or skipped. A test that needs a running server is not a test, it is a manual
-  step, and it belongs in the skill's verification checklist instead.
-- **Hermetic against the host.** Tests must not read the machine's real
-  configuration, home directory, or installed applications. If the code under
-  test discovers paths, pin that discovery to a temporary directory in the test
-  setup. A suite that passes only because of the author's machine is not
-  evidence.
-- **Deterministic.** No sleeps, no clock dependence, no ordering assumptions.
-- **The suite runs green before the change is proposed.** Report the exact
-  command and the observed result in the pull request.
+- **Sem rede e sem serviço ativo.** Qualquer coisa que fosse acessar a rede é
+  simulada ou ignorada. Um teste que precisa de um servidor em execução não é um
+  teste, é um passo manual, e o lugar dele é o checklist de verificação da skill.
+- **Isolado da máquina hospedeira.** Os testes não devem ler a configuração
+  real, o diretório pessoal nem os aplicativos instalados da máquina. Se o
+  código testado descobre caminhos, fixe essa descoberta em um diretório
+  temporário na preparação do teste. Uma suíte que passa só por causa da máquina
+  do autor não é evidência.
+- **Determinístico.** Sem esperas, sem dependência de relógio, sem suposições de
+  ordem.
+- **A suíte passa antes de a mudança ser proposta.** Relate o comando exato e o
+  resultado observado no pull request.
 
-### 8. Code-to-documentation consistency
+### 8. Consistência entre código e documentação
 
-When the code emits identifiers that must be documented — finding IDs, exit
-codes, states, event types — add a test that asserts every emitted identifier is
-documented, with the same severity or meaning. The writing rule is in
-`docs/development.md`.
+Quando o código emite identificadores que precisam ser documentados (IDs de
+achado, códigos de saída, estados, tipos de evento), adicione um teste que
+garanta que todo identificador emitido está documentado, com a mesma severidade
+ou o mesmo significado. A regra de escrita está em `docs/development.md`.
 
-- **Derive the identifiers from the code**, not from a second hand-written list,
-  so emitting one without documenting it fails the suite.
-- **Assert the scan found a non-empty set**, so a documentation reformat cannot
-  turn the test into a no-op that passes forever.
-- **Parse the structure you must read, not whole lines.** A line-shaped regex
-  both missed identifiers grouped into one table cell and matched unrelated
-  tables, failing on correct documentation. Read the table's cells instead.
+- **Derive os identificadores do código**, não de uma segunda lista escrita à
+  mão, para que emitir um identificador sem documentá-lo quebre a suíte.
+- **Garanta que a varredura encontrou um conjunto não vazio**, para que uma
+  reformatação da documentação não transforme o teste em algo que passa para
+  sempre sem verificar nada.
+- **Faça o parse da estrutura que você precisa ler, não de linhas inteiras.** Uma
+  expressão regular baseada em linhas tanto deixou passar identificadores
+  agrupados em uma única célula de tabela quanto casou com tabelas não
+  relacionadas, falhando em documentação correta. Leia as células da tabela.
 
-Reference implementation: the consistency test in the `task-checkpoint-recovery`
-skill's suite, which scans `scripts/` for emitted finding IDs and requires each
-one, with its real severity, in `references/schema.md` and `README.md`.
+Implementação de referência: o teste de consistência da suíte da skill
+`task-checkpoint-recovery`, que varre `scripts/` em busca dos IDs de achado
+emitidos e exige cada um deles, com a severidade real, em
+`references/schema.md` e em `README.md`.
 
-## Independent review
+### 9. Documentação em PT-BR e exemplos de uso
 
-A skill change must pass an independent review by a different model/context
-before merge. This repository's own `independent-code-review` skill is designed
-for exactly this: it runs a reviewer in a separate, isolated process, with no
-tools and no shared context, and produces graded findings.
+A regra de idioma é canônica em `CONTRIBUTING.md`, com a versão detalhada para
+autores de skill em `docs/development.md`. Antes de publicar, confirme que a
+mudança a respeita:
 
-The review must cover: security; leakage of private information; genericity;
-technical correctness; documentation; potentially dangerous instructions;
-declared compatibility; false sense of read-only; version dependencies;
-overengineering; and readiness for open-source publication.
+- a documentação humana alterada está em **português brasileiro (PT-BR)**;
+- toda skill tocada traz pelo menos um **exemplo simples de uso em linguagem
+  natural**, curto e pronto para copiar e colar no Hermes;
+- se o comportamento da skill mudou, os exemplos foram atualizados no mesmo pull
+  request;
+- comandos, APIs, parâmetros, caminhos, estruturas JSON e demais identificadores
+  técnicos continuam inalterados dentro do texto em português;
+- os links relativos continuam resolvendo depois da tradução (veja o item 2) e os
+  exemplos citados correspondem à implementação atual.
 
-## Validating findings
+## Revisão independente
 
-Reviewer output is not truth. For each finding, the author must:
+Uma mudança em uma skill precisa passar por uma revisão independente, feita por
+um modelo e um contexto diferentes, antes do merge. A própria skill
+`independent-code-review` deste repositório existe exatamente para isso: ela
+executa o revisor em um processo separado e isolado, sem ferramentas e sem
+contexto compartilhado, e produz achados classificados por severidade.
 
-- analyse it against the actual code and requirements;
-- reproduce it when possible (running tests is fine; editing during review is not);
-- classify it as **confirmed**, **rejected**, or **inconclusive**.
+A revisão deve cobrir: segurança; vazamento de informação privada; generalidade;
+correção técnica; documentação; instruções potencialmente perigosas;
+compatibilidade declarada; falsa sensação de somente leitura; dependências de
+versão; excesso de engenharia; e prontidão para publicação em código aberto.
 
-Confirmed `critical`, `high`, or `medium` findings are fixed, then the change is
-re-validated and reviewed again. Low or informational findings may be accepted
-deliberately when documented.
+## Validação dos achados
 
-## Manual verification loop
+A saída do revisor não é verdade. Para cada achado, o autor deve:
+
+- analisá-lo em relação ao código e aos requisitos reais;
+- reproduzi-lo quando possível (executar testes é permitido; editar durante a
+  revisão não é);
+- classificá-lo como **confirmado**, **rejeitado** ou **inconclusivo**.
+
+Achados confirmados de severidade `critical`, `high` ou `medium` são corrigidos e
+a mudança é revalidada e revisada de novo. Achados de severidade baixa ou
+informativos podem ser aceitos deliberadamente, quando documentados.
+
+## Ciclo de verificação manual
 
 ```bash
 # 1. install the changed skill into a scratch profile or a test Hermes home
@@ -151,5 +174,5 @@ deliberately when documented.
 git status --short
 ```
 
-If the skill touches Git or GitHub, confirm afterwards that no branch, commit,
-file, or remote changed unexpectedly.
+Se a skill mexe com Git ou GitHub, confirme depois que nenhum branch, commit,
+arquivo ou remote mudou de forma inesperada.

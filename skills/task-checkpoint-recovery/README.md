@@ -1,34 +1,54 @@
 # task-checkpoint-recovery
 
-Structured, revalidated checkpoints for long-running agent tasks.
+Checkpoints estruturados e revalidados para tarefas longas de agente.
 
-A long agent task gets interrupted: context compaction, a new session, a hand-off, a
-stopped loop. What usually gets lost is not the files (git has them) or the
-conversation (the session has it), but the *operational state*: which steps are done,
-which decisions were made and why, what is blocked, and which side effects already
-happened in the outside world. The cost of that loss is redoing work and, worse,
-repeating an effect such as a push, a merge or a download.
+Uma tarefa longa de agente é interrompida: compactação de contexto, sessão nova,
+hand-off, loop interrompido. O que costuma se perder não são os arquivos (o git
+tem) nem a conversa (a sessão tem), mas o *estado operacional*: quais passos
+estão prontos, quais decisões foram tomadas e por quê, o que está bloqueado e
+quais efeitos colaterais já aconteceram no mundo externo. O custo dessa perda é
+refazer trabalho e, pior, repetir um efeito como um push, um merge ou um
+download.
 
-This skill stores that state as a small JSON artifact inside the project and, crucially,
-**revalidates every claim against the project before acting on it**.
+Esta skill guarda esse estado em um pequeno artefato JSON dentro do projeto e,
+principalmente, **revalida cada afirmação contra o projeto antes de agir com base
+nela**.
 
-## Design in one paragraph
+## O que é
 
-A checkpoint is a claim about the past. `verify` revalidates it against git and the
-filesystem and reports drift instead of trusting the file. The operations ledger is
-append-only and records *claims* about side effects; `check-op` is the gate that decides
-whether an effect-carrying operation may run, so a resumed agent does not push twice.
-Nothing is written outside `<project>/.hermes/checkpoints/<slug>/`, no secrets are
-persisted, and a corrupt checkpoint is quarantined only after a valid history snapshot
-is available.
+Um checkpoint é uma alegação sobre o passado. O comando `verify` revalida essa
+alegação contra o git e o sistema de arquivos e reporta divergências, em vez de
+confiar no arquivo. O registro de operações é append-only e guarda *alegações*
+sobre efeitos colaterais; `check-op` é o portão que decide se uma operação com
+efeito pode rodar, para que um agente retomado não faça push duas vezes. Nada é
+escrito fora de `<project>/.hermes/checkpoints/<slug>/`, nenhum segredo é
+persistido, e um checkpoint corrompido só é colocado em quarentena depois que
+existe um snapshot válido do histórico.
 
-## Installation
+## Quando usar
 
-Copy or symlink `skills/task-checkpoint-recovery/` into your Hermes profile `skills/`
-directory, or keep it in this repository and run it by path. Requirements: Python 3.10+
-(stdlib only) and, optionally, `git` on `PATH`.
+- Antes de encerrar uma sessão no meio de uma tarefa com vários passos.
+- Antes de uma operação com efeito colateral (push, merge, download, deploy) que
+  não pode ser repetida por engano.
+- Ao retomar uma tarefa depois de compactação de contexto, hand-off ou sessão
+  nova.
+- Quando você precisa registrar por que uma decisão foi tomada, para não
+  rediscutir isso depois.
+- Quando quer um relatório legível do que já foi feito, do que está bloqueado e
+  do que vem a seguir.
 
-## Quick start
+## Exemplo rápido de uso
+
+```
+Salve um checkpoint desta tarefa antes de eu encerrar a sessão.
+```
+
+O agente grava um checkpoint com o objetivo, os passos e o status atual, e depois
+pode revalidá-lo e retomar a partir dele em outra sessão.
+
+## Como funciona
+
+### Fluxo básico
 
 ```bash
 cd skills/task-checkpoint-recovery
@@ -50,53 +70,77 @@ python scripts/checkpoint.py --project /path/to/repo resume-report --task my-tas
 python scripts/checkpoint.py --project /path/to/repo check-op --task my-task --kind push --target origin/main
 ```
 
-## Commands
+### Comandos
 
-| Command | Purpose |
+| Comando | Finalidade |
 |---|---|
-| `save` | write or update the checkpoint (additive, revision-guarded) |
-| `verify` | revalidate against the project; reports findings |
-| `resume-report` | human-readable report for resuming the task |
-| `record-op` | append a side-effect claim to the ledger |
-| `check-op` | decide whether an effect-carrying operation may run |
-| `show` / `list` | print one checkpoint / list all in the project |
-| `prune` | trim `history/` (`--dry-run` available) |
+| `save` | grava ou atualiza o checkpoint (aditivo, com guarda de revisão) |
+| `verify` | revalida contra o projeto e reporta achados |
+| `resume-report` | relatório legível para retomar a tarefa |
+| `record-op` | acrescenta uma alegação de efeito colateral ao registro |
+| `check-op` | decide se uma operação com efeito pode rodar |
+| `show` / `list` | imprime um checkpoint / lista todos os do projeto |
+| `prune` | reduz `history/` (`--dry-run` disponível) |
 
-## Exit codes
+### Códigos de saída
 
-| Code | Name | Meaning |
+| Código | Nome | Significado |
 |---|---|---|
-| 0 | `EXIT_OK` | success; for `verify`, no actionable finding (benign ones may still be reported) |
-| 1 | `EXIT_DRIFT` | findings (drift, staleness), any finding under `--strict`, a stale `--expect-revision`, or "do not repeat" from `check-op` |
-| 2 | `EXIT_CORRUPT` | corrupt/unreadable checkpoint, or a state that cannot be confirmed |
-| 3 | `EXIT_MISSING` | missing target, or an unresolved failure needing a decision |
-| 4 | `EXIT_USAGE` | invalid usage: unknown kind/state, refused secret, unsafe path |
+| 0 | `EXIT_OK` | sucesso; em `verify`, nenhum achado acionável (achados benignos ainda podem ser reportados) |
+| 1 | `EXIT_DRIFT` | achados (divergência, obsolescência), qualquer achado sob `--strict`, um `--expect-revision` desatualizado, ou "não repita" vindo de `check-op` |
+| 2 | `EXIT_CORRUPT` | checkpoint corrompido ou ilegível, ou um estado que não pode ser confirmado |
+| 3 | `EXIT_MISSING` | alvo ausente, ou uma falha não resolvida que precisa de decisão |
+| 4 | `EXIT_USAGE` | uso inválido: tipo ou estado desconhecido, segredo recusado, caminho inseguro |
 
-## Findings
+### Achados
 
-`verify` reports findings by id and severity (`critical`, `warning`, `info`):
-`history_rewritten`, `op_stale_claim`, `unsafe_path` (critical); `head_diverged`,
-`op_unresolved`, `op_planned_landed`, `op_unknown`, `branch_mismatch`, `dirty_tree`,
-`file_missing`, `file_drift` (warning); `op_planned`, `op_completed_unrecorded`, `git_unavailable`,
-`head_advanced`, `stale_checkpoint` (info).
+`verify` reporta achados por id e severidade (`critical`, `warning`, `info`):
 
-## Files
+| id | Severidade |
+|---|---|
+| `history_rewritten` | critical |
+| `op_stale_claim` | critical |
+| `unsafe_path` | critical |
+| `head_diverged` | warning |
+| `op_unresolved` | warning |
+| `op_planned_landed` | warning |
+| `op_unknown` | warning |
+| `branch_mismatch` | warning |
+| `dirty_tree` | warning |
+| `file_missing` | warning |
+| `file_drift` | warning |
+| `op_planned` | info |
+| `op_completed_unrecorded` | info |
+| `git_unavailable` | info |
+| `head_advanced` | info |
+| `stale_checkpoint` | info |
+
+### Arquivos
 
 ```
-SKILL.md                       agent-facing instructions
-README.md                      this file
-references/schema.md           checkpoint schema, fields, exit codes, findings
-references/hermes-integration.md  how to wire it into a Hermes workflow
-scripts/checkpoint.py          CLI
-scripts/_common.py             storage, validation, locking, secret scanning
-scripts/validate.py            read-only validator for CI and pre-commit
+SKILL.md                          instruções voltadas ao agente
+README.md                         este arquivo
+references/schema.md              schema do checkpoint, campos, códigos de saída, achados
+references/hermes-integration.md  como ligar a skill a um fluxo do Hermes
+scripts/checkpoint.py             CLI
+scripts/_common.py                armazenamento, validação, locking, busca de segredos
+scripts/validate.py               validador somente leitura para CI e pre-commit
 tests/test_task_checkpoint_recovery.py
 tests/test_hardening.py
 tests/test_now_flag.py
 tests/test_review_regressions.py
 ```
 
-## Tests
+## Instalação e requisitos
+
+Copie ou crie um link simbólico de `skills/task-checkpoint-recovery/` para o
+diretório `skills/` do seu perfil do Hermes, ou mantenha a skill neste
+repositório e execute pelo caminho.
+
+Requisitos: Python 3.10+ (somente biblioteca padrão) e, opcionalmente, `git` no
+`PATH`.
+
+## Testes
 
 ```bash
 cd skills/task-checkpoint-recovery
@@ -104,12 +148,27 @@ python -m unittest discover -s tests -t tests -v
 python scripts/validate.py --project /path/to/repo --digests
 ```
 
-## Limitations
+`unittest` da biblioteca padrão, sem rede e sem `git` obrigatório.
 
-Single-task scope; git-only repo revalidation; effects with no local trace stay claims;
-no pre-compaction or iteration-budget event exists in Hermes, so interruption is handled
-by preventive checkpoints rather than detection.
+`scripts/validate.py` é um validador somente leitura, pensado para CI e
+pre-commit: ele compara os checkpoints existentes em
+`<projeto>/.hermes/checkpoints/` com o estado atual do projeto. Por isso, um
+checkpoint antigo aparece como divergência, inclusive quando a única diferença é
+o fim de linha (por exemplo, com `core.autocrlf=true`). Nesse caso, atualize o
+checkpoint com `save` ou rode o validador em um projeto sem checkpoints
+obsoletos.
 
-## License
+## Limitações
+
+- Escopo de uma única tarefa por vez.
+- A revalidação do repositório é feita via git; projetos sem git têm fatos de
+  repositório indisponíveis.
+- Efeitos que não deixam rastro local continuam sendo apenas alegações.
+- Não existe evento de pré-compactação nem de orçamento de iteração no Hermes,
+  então a interrupção é tratada com checkpoints preventivos, e não por detecção.
+- A skill registra e revalida estado; ela não retoma a tarefa por você nem
+  desfaz efeitos colaterais que já aconteceram.
+
+## Licença
 
 MIT.
