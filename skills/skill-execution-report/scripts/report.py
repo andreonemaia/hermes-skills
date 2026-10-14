@@ -12,8 +12,10 @@ Usage:
     python scripts/report.py --session latest --json
     python scripts/report.py --session latest --include-children --repo <path>
 
-Exit codes: 0 evidence found, 1 no evidence, 2 corrupt source, 3 missing
-source, 4 usage error.
+Exit codes: 0 evidence found, 1 no evidence, 2 corrupt source (also used for an
+internal analysis/render failure, always with a message on stderr and no
+traceback), 3 missing source, 4 usage error, 5 analysis succeeded but ``--out``
+could not be written.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from _common import (  # noqa: E402
     EXIT_MISSING,
     EXIT_NO_EVIDENCE,
     EXIT_OK,
+    EXIT_OUTPUT,
     EXIT_USAGE,
     MAX_SKILLS_DEFAULT,
     ReportError,
@@ -96,7 +99,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", default=None, metavar="PATH",
                         help="grava o relatório no arquivo informado além do stdout")
     parser.add_argument("--max-skills", type=int, default=MAX_SKILLS_DEFAULT,
-                        metavar="N", help="limite da lista de skills disponíveis no JSON")
+                        metavar="N", help="limite da lista de skills disponíveis no JSON "
+                                          "(0 = sem limite; negativo é erro de uso)")
     return parser
 
 
@@ -121,6 +125,10 @@ def collect(args) -> tuple[dict, int]:
     until = parse_window(args.until, "until")
     if since is not None and until is not None and since > until:
         raise ReportError("--since é posterior a --until")
+    if args.max_skills is not None and args.max_skills < 0:
+        raise ReportError("--max-skills deve ser >= 0 (0 = sem limite)")
+    # 0 (or an unset value) means "no cap" everywhere below.
+    max_skills = args.max_skills or 0
 
     db = StateDb(db_path)
     try:
@@ -130,12 +138,18 @@ def collect(args) -> tuple[dict, int]:
 
         scopes: list[dict] = []
         all_events: list[dict] = []
+        scope_repos: dict[str, str | None] = {}
         for scope_name, scope_session in [("main", session)] + [
             ("child:%s" % child["id"], child)
             for child in (db.children(session["id"]) if args.include_children else [])
         ]:
+            # Every scope is verified against its own repository: a child session
+            # may have run in a different checkout, and --repo stays the explicit
+            # override for all of them.
+            scope_repo = args.repo or scope_session.get("git_repo_root") or repo
+            scope_repos[scope_name] = scope_repo
             events, facts = collect_session_events(
-                db, scope_session, index, since, until, scope_name, repo,
+                db, scope_session, index, since, until, scope_name, scope_repo,
                 not args.no_artifact_check,
             )
             scopes.append({"scope": scope_name, "session_id": scope_session["id"],
@@ -147,7 +161,8 @@ def collect(args) -> tuple[dict, int]:
             findings.extend(classify_scope(
                 scope["scope"], all_events, scope["session"], set(index.sorted_names()),
                 [root for root in (scope["session"].get("cwd"),
-                                   scope["session"].get("git_repo_root"), repo) if root],
+                                   scope["session"].get("git_repo_root"),
+                                   scope_repos.get(scope["scope"])) if root],
                 not args.no_artifact_check,
                 bool(since or until),
                 bool(scope["facts"].get("compacted_messages")),
@@ -166,28 +181,42 @@ def collect(args) -> tuple[dict, int]:
         counts = summarise(findings, set(available), observed)
 
         sources = {
-            "state_db": dict(file_facts(db_path), schema={
-                "compatible": True, "problems": []}, sessions_total=db.session_count()),
+            "state_db": dict(
+                file_facts(db_path),
+                schema={"compatible": bool(db.schema.get("compatible", True)),
+                        "problems": list(db.schema.get("problems") or [])},
+                sessions_total=db.session_count(),
+            ),
             "usage_json": dict(
                 {"present": usage.get("present", False),
-                 "counters_are_global": True},
+                 "counters_are_global": bool(usage.get("present", False))},
+                **({"malformed_entries": list(usage["malformed_entries"])}
+                   if usage.get("malformed_entries") else {}),
                 **(usage.get("file") or {}),
             ),
             "skills_index": {"roots_count": len(skills_roots),
                              "skills_known": len(available)},
             "git": git_facts(repo),
         }
+        # Every source the run actually consulted is named here, so a reader can
+        # tell what was looked at and what was skipped.
+        sources_enabled = ["state_db"]
+        if usage.get("present"):
+            sources_enabled.append("usage_json")
+        sources_enabled.append("skills_index")
+        if repo:
+            sources_enabled.append("git")
         options = {
             "since": iso(since), "until": iso(until),
             "include_children": args.include_children,
             "artifact_check": not args.no_artifact_check,
             "max_skills": args.max_skills,
-            "sources_enabled": ["state_db"] + (["usage_json"] if usage.get("present") else []),
+            "sources_enabled": sources_enabled,
         }
         payload = build_report(
             generated_at=iso(now_ts()) or "", session=session, scopes=scopes,
             findings=findings, divergences=divergence_rows,
-            available_names=available[: args.max_skills] if args.max_skills else available,
+            available_names=available[:max_skills] if max_skills > 0 else available,
             usage=usage, index_roots=skills_roots, sources=sources,
             options=options, counts=counts,
         )
@@ -200,15 +229,87 @@ def collect(args) -> tuple[dict, int]:
         db.close()
 
 
+def make_stream_tolerant(stream) -> None:
+    """Make ``stream`` survive characters its encoding cannot represent.
+
+    The report quotes transcript text and skill names, so a redirected stdout or
+    stderr on a narrow code page (cp1252 on Windows) would raise
+    ``UnicodeEncodeError`` halfway through the output, leaving a truncated report
+    and a traceback. Replacing the unrepresentable character keeps the report
+    readable and the exit code intact. Streams that cannot be reconfigured (a
+    wrapper, a test double, a closed pipe) are left untouched.
+    """
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except (ValueError, OSError):
+        pass
+
+
+def _silence_stdout() -> None:
+    """Point further stdout writes at the null device.
+
+    Called when the reader of the pipe went away (``report.py | head``): the
+    interpreter would otherwise try to flush the buffered text while exiting and
+    print a second, confusing error after the one already handled.
+    """
+    try:
+        fileno = sys.stdout.fileno()
+    except (AttributeError, OSError, ValueError):
+        # A replaced stdout (test double, captured stream) has no descriptor;
+        # there is nothing to silence and no reason to open the null device.
+        return
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), fileno)
+    except OSError:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Run the CLI and return the exit code.
+
+    Every failure path returns a documented code instead of letting an exception
+    escape: an uncaught exception would make the process exit with 1, which is
+    reserved for "no findings", and a crash would then be indistinguishable from
+    a clean run that found nothing.
+    """
+    make_stream_tolerant(sys.stdout)
+    make_stream_tolerant(sys.stderr)
     args = build_parser().parse_args(argv)
+    # Sentinel: if the run is interrupted before ``collect`` returns its code,
+    # the outcome is unknown, and unknown must not look like "no findings".
+    code = EXIT_CORRUPT
     try:
         payload, code = collect(args)
+        text = to_json(payload) if args.json else render_text(payload)
+        sys.stdout.write(text)
+        # Flush here so a closed pipe surfaces now, inside the handler below,
+        # instead of during interpreter shutdown where nothing can catch it.
+        sys.stdout.flush()
+        if args.out:
+            try:
+                with open(args.out, "w", encoding="utf-8") as handle:
+                    handle.write(text)
+            except OSError as exc:
+                print("não foi possível gravar %s: %s" % (args.out, exc), file=sys.stderr)
+                return EXIT_OUTPUT
+    except BrokenPipeError:
+        # The reader closed the pipe; the analysis itself succeeded and is
+        # reported through the exit code. Nothing is printed, because there is
+        # nowhere left to print to.
+        _silence_stdout()
+        return code
     except SourceMissing as exc:
-        print("fonte ausente: %s" % exc, file=sys.stderr)
+        # Achado 46: a mensagem carrega referências do usuário (id de sessão,
+        # prefixo, caminho do banco). Passa pelo mesmo `redact` dos demais
+        # erros, senão o stderr vira uma segunda via de vazamento, fora do
+        # relatório que já é sanitizado.
+        print("fonte ausente: %s" % redact(str(exc), 200), file=sys.stderr)
         return EXIT_MISSING
     except SourceCorrupt as exc:
-        print("fonte ilegível: %s" % exc, file=sys.stderr)
+        print("fonte ilegível: %s" % redact(str(exc), 200), file=sys.stderr)
         return EXIT_CORRUPT
     except (sqlite3.Error, OSError) as exc:
         print("erro ao ler a fonte: %s" % redact(str(exc), 200), file=sys.stderr)
@@ -216,16 +317,13 @@ def main(argv: list[str] | None = None) -> int:
     except ReportError as exc:
         print("erro: %s" % exc, file=sys.stderr)
         return EXIT_USAGE
-
-    text = to_json(payload) if args.json else render_text(payload)
-    sys.stdout.write(text)
-    if args.out:
-        try:
-            with open(args.out, "w", encoding="utf-8") as handle:
-                handle.write(text)
-        except OSError as exc:
-            print("não foi possível gravar %s: %s" % (args.out, exc), file=sys.stderr)
-            return EXIT_CORRUPT
+    except Exception as exc:  # noqa: BLE001 - no documented code means "crash"
+        # An internal fault is reported as an untrustworthy analysis (the same
+        # family as EXIT_CORRUPT) with a message and no traceback. The one thing
+        # it must never do is exit 1, which would claim "no evidence found".
+        print("erro interno (%s): %s" % (type(exc).__name__, redact(str(exc), 200)),
+              file=sys.stderr)
+        return EXIT_CORRUPT
     return code
 
 

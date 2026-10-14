@@ -28,6 +28,23 @@ skill é o campo `version` do seu próprio `SKILL.md`.
 
 ### Fixed
 
+- `skill-execution-report` (0.1.0): tratamento da revisão independente do PR #6 —
+  66 achados confirmados corrigidos e 7 rejeitados com justificativa técnica
+  Entre as correções: resultado de
+  `skill_script` não observado deixou de virar sucesso implícito (novo motivo
+  `skill_script_result_unknown`); `EXIT_OUTPUT = 5` separa `--out` não gravável de
+  fonte corrompida; `SER_NOW` inválido é erro de uso (4), sem traceback;
+  `parse_iso` rejeita timestamps não finitos e fora da faixa representável;
+  `os.path.commonpath` não derruba mais o relatório com unidades diferentes;
+  SQLite abre com `mode=ro` e `uri=True` tratando `OperationalError` e
+  `sqlite3.Error`; prefixo de sessão escapa curingas de `LIKE`; truncagem de
+  payload é sinalizada em vez de silenciosa; `.usage.json` estruturalmente
+  inválido vira `malformed_entries`; JWT é redigido por inteiro (inclusive a
+  assinatura) e o `stderr` é sanitizado também em `--json`; caminhos sob o home
+  colapsam para `<home>`. A linha 7 da tabela de decisão de
+  `references/evidence-rules.md` citava `edit_without_load` como `state_reason`,
+  mas o classificador emite `skill_manage_only` e reserva `edit_without_load` para
+  limitação: corrigido e fixado por regressão. Suíte: 142 testes.
 - Documentação do `task-checkpoint-recovery` alinhada com a implementação: um
   `--expect-revision` desatualizado sai com código 1 (`EXIT_DRIFT`), não 3; o
   `verify` reprova a execução em todo achado não benigno (não apenas com
@@ -39,10 +56,14 @@ skill é o campo `version` do seu próprio `SKILL.md`.
 
 - Skill `skill-execution-report` (0.1.0): reconstrói, a partir do `state.db` e do
   `.usage.json` do Hermes, o que realmente aconteceu com cada skill em uma sessão,
-  separando "disponível", "mencionada", "carregada" (`skill_view`) e "executada",
-  e marcando como não verificável tudo o que não tem evidência atribuível. Somente
-  leitura (nunca escreve no `state.db` nem altera contadores nativos), saída em
-  JSON determinístico e relatório humano derivado dele, classificação
+  separando `discovered` (nome mencionado), `loaded` (`skill_view` com sucesso
+  observado), `invoked` (chamada atribuível, mesmo com resultado desconhecido ou
+  falha) e `execution_proven` (sucesso com artefato verificado), com `available`
+  mantido como vocabulário documental e `unverifiable` para o sinal que existe mas
+  não é atribuível a um estado verificado. Somente leitura (nunca escreve no
+  `state.db` nem altera contadores nativos), saída em JSON determinístico com o
+  relógio fixado por `SER_NOW` (senão o relógio do sistema, indicado em
+  `clock_source`) e relatório humano derivado dele, classificação
   conservadora, trechos de evidência higienizados, opção `--include-children`
   para incluir sessões filhas e `SER_NOW` para testes determinísticos. Somente
   biblioteca padrão; acompanha uma suíte `unittest` hermética (SQLite sintético e

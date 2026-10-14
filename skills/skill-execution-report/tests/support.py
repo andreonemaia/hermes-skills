@@ -3,6 +3,18 @@
 Everything here builds throw-away SQLite databases, skill directories and
 usage files under a temporary directory. No test reads the real Hermes state,
 touches the network, or depends on the developer's configuration.
+
+Importing this module has two deliberate, process-wide side effects:
+
+* ``SCRIPTS_DIR`` is prepended to ``sys.path`` so the tests can ``import
+  report``/``evidence``/``classify`` without installing the skill. The insert
+  is intentional, guarded (it is skipped when the path is already present) and
+  scoped to the interpreter running the suite: nothing is written to disk and
+  nothing outside this process is affected.
+* Streams and environment are never patched at import time. ``report.main()``
+  reads ``HERMES_HOME`` and ``SER_NOW`` when it runs, so :func:`run_cli` can
+  point a single call at a sandbox, capture the streams and then restore the
+  previous values.
 """
 
 from __future__ import annotations
@@ -18,6 +30,9 @@ import tempfile
 
 SKILL_DIR = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = SKILL_DIR / "scripts"
+# Intencional e de escopo de processo: permite ``import report`` sem instalar a
+# skill. A guarda ``not in sys.path`` evita duplicar a entrada, de modo que
+# reimportar este módulo não muda o ``sys.path`` além da primeira vez.
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -133,7 +148,13 @@ def session(sid: str, **kw) -> dict:
 
 
 class Sandbox:
-    """A temporary ``HERMES_HOME`` populated with synthetic sources."""
+    """A temporary ``HERMES_HOME`` populated with synthetic sources.
+
+    Use it as a context manager (``with Sandbox() as box:``) in probes and in
+    helpers that are not a ``TestCase``; the temporary tree is then released
+    even when the body raises. Inside a ``TestCase`` prefer ``cleanup()``
+    through ``addCleanup``, which runs after the test whatever its outcome.
+    """
 
     def __init__(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="ser-test-", ignore_cleanup_errors=True)
@@ -143,7 +164,16 @@ class Sandbox:
         self.db_path = self.home / "state.db"
         self.usage_path = self.home / "skills" / ".usage.json"
 
+    def __enter__(self) -> "Sandbox":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> bool:
+        # Nunca engole a exceção do bloco: apenas libera a árvore temporária.
+        self.cleanup()
+        return False
+
     def cleanup(self) -> None:
+        """Libera a árvore temporária. Idempotente: chamar duas vezes é seguro."""
         self._tmp.cleanup()
 
     # ------------------------------------------------------------- sources
@@ -159,7 +189,24 @@ class Sandbox:
         return self.usage_path
 
     def database(self, sessions=(), messages=(), drop=(), raw=None, tables=None):
-        """Create ``state.db``. ``drop`` removes columns; ``raw`` writes bytes."""
+        """Create (or rebuild) ``state.db``. ``drop`` removes columns; ``raw`` writes bytes.
+
+        Idempotente: cada chamada faz ``DROP TABLE IF EXISTS`` nas tabelas
+        declaradas antes de recriá-las, então um teste pode chamar o método de
+        novo (para acrescentar uma segunda fonte, uma coluna nova, outra leva de
+        linhas) em vez de falhar com ``table already exists``. A reconstrução
+        atinge apenas o ``state.db`` deste sandbox.
+
+        A exceção é ``raw``: ele grava bytes crus, que não são um SQLite
+        abrível, de modo que uma chamada seguinte sem ``raw`` sobrescreve o
+        arquivo por inteiro em vez de executar os ``DROP TABLE``.
+
+        Só *nomes* (tabela e coluna) são interpolados na DDL/DML, e todos vêm
+        das constantes deste módulo ou de argumentos explícitos do teste --
+        nunca de dados de origem. Todo *valor* de linha passa por placeholders
+        ``?`` em :meth:`_insert`, de modo que uma fixture pode guardar aspas,
+        ``%`` ou palavras-chave SQL literalmente sem alterar o comando.
+        """
         if raw is not None:
             self.db_path.write_bytes(raw)
             return self.db_path
@@ -170,6 +217,7 @@ class Sandbox:
                 "messages": MESSAGE_COLUMNS,
             }
             for table, columns in definition.items():
+                conn.execute("DROP TABLE IF EXISTS %s" % table)
                 kept = [c for c in columns if c.split()[0] not in drop]
                 conn.execute("CREATE TABLE %s (%s)" % (table, ", ".join(kept)))
             self._insert(conn, "sessions", sessions)
@@ -206,7 +254,23 @@ class Sandbox:
 
 
 def run_cli(argv, home, now: str = "2026-10-13T12:00:00Z"):
-    """Run the CLI in-process against ``home`` and capture its streams."""
+    """Run the CLI in-process against ``home`` and capture its streams.
+
+    Contract (achado 42): ``report.main()`` lê ``HERMES_HOME`` e ``SER_NOW`` do
+    ambiente *no momento em que é chamado* -- nunca no import. Por isso este
+    helper escreve as duas variáveis imediatamente antes da chamada e devolve os
+    valores anteriores em ``finally``; apontar ``home`` para outro sandbox no
+    meio da suíte não exige reimportar nada.
+
+    Os streams vêm de ``contextlib.redirect_stdout``/``redirect_stderr``, que
+    restauram sozinhos mesmo quando ``main`` levanta. O restante (ambiente) é
+    restaurado no ``finally``, que também roda nesse caminho: nenhum teste deixa
+    ``HERMES_HOME``/``SER_NOW`` alterados para o próximo, e ``run_cli`` não
+    substitui ``sys.stdout``/``sys.stderr`` de forma permanente (achado 14).
+
+    ``argv`` é sempre um iterável de argumentos, como ``("--json",)``.
+    Devolve ``(exit_code, stdout, stderr)``.
+    """
     import report
 
     previous = {key: os.environ.get(key) for key in ("HERMES_HOME", "SER_NOW")}
@@ -234,3 +298,29 @@ def finding_for(payload: dict, name: str, scope: str = "main"):
         if item["skill"] == name and item["scope"] == scope:
             return item
     return None
+
+
+def find_one(payload: dict, name: str, scope: str = "main") -> dict:
+    """Como :func:`finding_for`, mas falha alto quando o achado não existe.
+
+    Mesma assinatura de :func:`finding_for` -- ``(payload, name, scope="main")``
+    -- para que um teste possa alternar entre a forma leniente e a estrita sem
+    mudar a chamada (achado 79). Os helpers de busca da suíte usam essa
+    assinatura; nenhum deles recebe o payload em outra ordem.
+    """
+    found = finding_for(payload, name, scope)
+    if found is None:
+        raise AssertionError("achado ausente para %r (scope=%s)" % (name, scope))
+    return found
+
+
+def compacted(uid: str, ts: float, content: str = "trecho já compactado", **extra) -> dict:
+    """Uma linha de transcript que o Hermes já compactou (``compacted = 1``).
+
+    A compactação reescreve o conteúdo da linha, mas o relatório precisa
+    continuar analisando a mensagem e declarar a limitação, em vez de perder a
+    evidência silenciosamente (achado 76).
+    """
+    row = user(uid, ts, content, **extra)
+    row["compacted"] = 1
+    return row

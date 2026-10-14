@@ -27,11 +27,18 @@ EXIT_NO_EVIDENCE = 1
 EXIT_CORRUPT = 2
 EXIT_MISSING = 3
 EXIT_USAGE = 4
+#: The analysis succeeded but the requested output file could not be written.
+#: It is kept apart from EXIT_CORRUPT (nothing was wrong with the sources) and
+#: from EXIT_OK (the caller did not get the file it asked for).
+EXIT_OUTPUT = 5
 
 #: Ordered observation ladder. A skill is reported at the strongest state that
-#: the collected evidence actually supports. ``unverifiable`` is not part of the
-#: ladder: it means a signal exists but cannot be attributed to a verified
-#: state, so it is never presented as proof of use.
+#: the collected evidence actually supports. ``unverifiable`` is not a rung of
+#: the ladder: it means a signal exists but cannot be attributed to a verified
+#: state, so it is never presented as proof of use. It does share rank 0 with
+#: ``available`` (a documented state that is never emitted as a finding), and
+#: findings are ordered by rank, then skill, then scope, so the two can never be
+#: confused by position.
 SKILL_STATES = (
     "available",
     "discovered",
@@ -81,9 +88,10 @@ SOURCE_IDS = ("state_db", "usage_json", "skills_index", "git")
 RESULT_STATES = ("succeeded", "failed", "unknown")
 VERIFICATION_STATES = ("verified", "unverifiable")
 
-#: Bases a report may resolve produced paths against. Anything outside these is
-#: never stat-ed.
+#: Excerpts are truncated to this many characters before being quoted.
 MAX_EXCERPT = 160
+#: Default cap for the ``available_skills`` list in the JSON payload; the CLI
+#: documents ``--max-skills 0`` as "no cap".
 MAX_SKILLS_DEFAULT = 200
 
 DENY_VALUE_RES = (
@@ -92,7 +100,9 @@ DENY_VALUE_RES = (
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{12,}\b"),
-    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\."),
+    # A JWT is header.payload.signature: the third segment is the credential, so
+    # it must be consumed too (the unsigned two-segment form stays accepted).
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]+)?"),
     re.compile(r"(?i)\b(api[_-]?key|token|password|passwd|secret)\s*[:=]\s*\S{6,}"),
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._-]{16,}"),
     re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@"),
@@ -109,7 +119,8 @@ HOME_PATH_RES = (
 )
 #: Session identifiers are not secrets, but they are the only handle that can
 #: link a public report back to a private transcript, so excerpts drop them.
-SESSION_ID_RE = re.compile(r"\b\d{8}_\d{6}_[0-9a-f]{6}\b")
+#: The random suffix is hex, so both cases occur in the wild.
+SESSION_ID_RE = re.compile(r"\b\d{8}_\d{6}_[0-9a-fA-F]{6}\b")
 
 WS_RE = re.compile(r"\s+")
 REDACTED = "[redacted]"
@@ -168,10 +179,18 @@ def default_skills_root() -> str:
 
 
 def now_ts() -> float:
-    """Current epoch seconds, or the ``SER_NOW`` override for tests."""
+    """Current epoch seconds, or the ``SER_NOW`` override for tests.
+
+    An unusable ``SER_NOW`` is a usage problem, so it is reported as a
+    ``ReportError`` (EXIT_USAGE with a message) instead of escaping as a
+    ``ValueError`` traceback.
+    """
     override = os.environ.get("SER_NOW")
     if override:
-        return parse_iso(override)
+        try:
+            return parse_iso(override)
+        except ValueError as exc:
+            raise ReportError("SER_NOW inválido: %s" % exc) from exc
     return time.time()
 
 
@@ -179,15 +198,33 @@ def clock_source() -> str:
     return "SER_NOW" if os.environ.get("SER_NOW") else "system"
 
 
+#: Instants outside the range ``datetime`` can render are refused by
+#: ``parse_iso``, so a timestamp this module produced itself never comes back as
+#: ``None`` from ``iso()``.
+MIN_EPOCH = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc).timestamp()
+MAX_EPOCH = datetime.datetime.max.replace(tzinfo=datetime.timezone.utc).timestamp()
+
+
 def parse_iso(value: str) -> float:
-    """Parse an ISO-8601 timestamp or a bare epoch number into epoch seconds."""
+    """Parse an ISO-8601 timestamp or a bare epoch number into epoch seconds.
+
+    Non-finite numbers (``nan``, ``inf``, ``1e999``) and instants outside the
+    range ``datetime`` can render are rejected: accepting them would poison every
+    later comparison and make ``iso()`` silently return ``None``.
+    """
     text = (value or "").strip()
     if not text:
         raise ValueError("empty timestamp")
     try:
-        return float(text)
+        number = float(text)
     except ValueError:
         pass
+    else:
+        # ``nan`` fails this comparison too, so one range check covers nan, inf
+        # and out-of-range instants.
+        if not MIN_EPOCH <= number <= MAX_EPOCH:
+            raise ValueError("timestamp não finito ou fora de faixa: %s" % value)
+        return number
     normalised = text[:-1] + "+00:00" if text.endswith("Z") else text
     try:
         parsed = datetime.datetime.fromisoformat(normalised)
@@ -195,7 +232,16 @@ def parse_iso(value: str) -> float:
         raise ValueError("invalid ISO-8601 timestamp: %s" % value) from exc
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=datetime.timezone.utc)
-    return parsed.timestamp()
+    try:
+        number = parsed.timestamp()
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError("timestamp fora de faixa: %s" % value) from exc
+    # The ISO branch must honour the same range as the numeric one: an offset
+    # can push a representable ``datetime`` past ``MAX_EPOCH``, and a timestamp
+    # this module produced itself must never come back as ``None`` from ``iso()``.
+    if not MIN_EPOCH <= number <= MAX_EPOCH:
+        raise ValueError("timestamp fora de faixa: %s" % value)
+    return number
 
 
 def iso(ts: float | None) -> str | None:
@@ -277,6 +323,12 @@ def open_ro(path: str) -> sqlite3.Connection:
     uri = "file:%s?mode=ro" % escaped
     try:
         conn = sqlite3.connect(uri, uri=True, timeout=5.0)
+    except sqlite3.OperationalError as exc:
+        # The file can disappear between the existence check above and the open;
+        # that is a missing source, not a corrupt one.
+        if "unable to open database file" in str(exc):
+            raise SourceMissing("database not found: %s" % os.path.basename(path)) from exc
+        raise SourceCorrupt("cannot open database read-only: %s" % exc) from exc
     except sqlite3.Error as exc:
         raise SourceCorrupt("cannot open database read-only: %s" % exc) from exc
     try:
@@ -311,22 +363,37 @@ def load_usage(path: str | None) -> dict:
     wrapper is accepted too. These counters are global to the Hermes
     installation, not per session, so they are always reported as aggregate
     signals that cannot be attributed to one session.
+
+    Entries whose value is not an object are listed in ``malformed_entries``
+    rather than dropped silently. When no usable entry is left the file is
+    reported as a corrupt source: claiming "no counters" for a file whose shape
+    was not understood would be a silent lie.
     """
     if not path or not os.path.exists(path):
         return {"present": False, "skills": {}, "counters_are_global": True}
     data = load_json_file(path)
     if isinstance(data, dict) and isinstance(data.get("skills"), dict):
-        skills = data["skills"]
+        raw = data["skills"]
     elif isinstance(data, dict):
-        skills = {key: value for key, value in data.items() if isinstance(value, dict)}
+        raw = data
     else:
         raise SourceCorrupt("unexpected .usage.json structure")
-    return {
+    malformed = sorted(key for key, value in raw.items() if not isinstance(value, dict))
+    skills = {key: value for key, value in raw.items() if isinstance(value, dict)}
+    if malformed and not skills:
+        raise SourceCorrupt(
+            "estrutura inesperada em .usage.json: nenhuma entrada de skill "
+            "reconhecida (chaves: %s)" % ", ".join(malformed)
+        )
+    result = {
         "present": True,
         "skills": skills,
         "counters_are_global": True,
         "file": file_facts(path),
     }
+    if malformed:
+        result["malformed_entries"] = malformed
+    return result
 
 
 def file_facts(path: str) -> dict:

@@ -6,13 +6,15 @@ configuration, the network, or any external service.
 
 Run with::
 
-    python -m unittest discover -s tests -t tests -v
+    python -m unittest discover -s tests -v
 """
 
 from __future__ import annotations
 
 import json
 import os
+import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -197,6 +199,11 @@ class TestConservativeClassification(SerCase):
         finding = find_one(payload, "alpha")
         self.assertEqual(finding["state"], "loaded")
         self.assertTrue(finding["evidence"][0]["ok"])
+        # The load is real but no call in the transcript points at it, so the
+        # finding has to carry that limitation and the orphan flag instead of
+        # reading like a clean, confirmed load.
+        self.assertIn("out_of_transcript_load", finding["limitations"])
+        self.assertIs(finding["evidence"][0]["orphan_result"], True)
 
 
 # ------------------------------------------------------------------ execution
@@ -242,6 +249,20 @@ class TestExecutionEvidence(SerCase):
         self.assertEqual(finding["verification"]["basis"], "artifact_file")
         self.assertEqual(finding["verification"]["detail"], "out/report.json")
         self.assertEqual(payload["counts"]["skills_execution_proven"], 1)
+
+    def test_unobserved_script_result_renders_a_pt_br_reason(self):
+        # Regressão (revalidação p3): `skill_script_result_unknown` não tinha
+        # rótulo em PT-BR, então o relatório em texto exibia o código cru e
+        # descrevia a invocação sem dizer que o resultado era desconhecido.
+        self.box.skill("alpha")
+        self.box.database(
+            sessions=[session("s1")],
+            messages=[msg(assistant("a1", 1000.0, [script_call(script_argv("alpha"))]), "s1")],
+        )
+        code, out, _err = self.run_cli(())
+        self.assertEqual(code, 0)
+        self.assertNotIn("skill_script_result_unknown", out)
+        self.assertIn("resultado não foi observado", out)
 
     def test_artifact_check_can_be_disabled(self):
         self.box.skill("alpha")
@@ -346,6 +367,60 @@ class TestChildScopes(SerCase):
         self.assertIn("compacted_messages_present", finding["limitations"])
         self.assertEqual(payload["sessions_analysed"][0]["compacted_messages"], 1)
 
+    # Achado 47: o caminho de escopo filho só era testado no caso feliz. Os dois
+    # casos abaixo fixam que a ausência de filhos e um filho sem linhas legíveis
+    # não viram erro nem contagem inventada.
+    def test_include_children_without_children_is_not_an_error(self):
+        self.box.skill("alpha")
+        self.box.database(sessions=[session("s1")], messages=self.loaded_pair("alpha", "a1"))
+        code, payload, _out, err = self.run_json(("--json", "--session", "s1", "--include-children"))
+        self.assertEqual(code, 0)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(payload["analysis"]["children_analysed"], [])
+        # Nada foi excluído, então o sinal de exclusão não deve aparecer.
+        self.assertNotIn("children_excluded", payload["unknowns"])
+        self.assertEqual(payload["counts"]["skills_loaded"], 1)
+
+    def test_child_without_readable_rows_is_still_scoped_not_dropped(self):
+        self.box.skill("alpha")
+        self.box.skill("beta")
+        self.box.database(
+            sessions=[session("s1", started_at=1000.0),
+                      session("s2", started_at=2000.0, parent_session_id="s1")],
+            messages=self.loaded_pair("alpha", "a1"),
+        )
+        code, payload, _out, err = self.run_json(
+            ("--json", "--session", "s1", "--include-children"))
+        self.assertEqual(code, 0)
+        self.assertNotIn("Traceback", err)
+        # O filho existe e é analisado; o que ele não tem é evidência de uso.
+        self.assertEqual(payload["analysis"]["children_analysed"], ["s2"])
+        self.assertIsNone(finding_for(payload, "beta"))
+        self.assertNotIn("children_excluded", payload["unknowns"])
+
+    def test_hidden_child_is_analysed_when_the_parent_is_named(self):
+        # `hidden` esconde a sessão das listagens, não a torna inexistente: o
+        # vínculo por parent_session_id é a autoridade quando o pai foi nomeado.
+        self.box.skill("alpha")
+        self.box.skill("beta")
+        messages = self.loaded_pair("alpha", "a1")
+        messages += [
+            msg(assistant("a2", 2000.0, [view_call("beta", "call-2")]), "s2"),
+            msg(tool("a2-r", 2001.0, "call-2",
+                     json.dumps({"success": True}), name="skill_view"), "s2"),
+        ]
+        self.box.database(
+            sessions=[session("s1", started_at=1000.0),
+                      session("s2", started_at=2000.0, parent_session_id="s1", hidden=1)],
+            messages=messages,
+        )
+        code, payload, _out, err = self.run_json(
+            ("--json", "--session", "s1", "--include-children"))
+        self.assertEqual(code, 0)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(payload["analysis"]["children_analysed"], ["s2"])
+        self.assertEqual(find_one(payload, "beta", scope="child:s2")["state"], "loaded")
+
 
 # ------------------------------------------------------------ aggregate usage
 class TestAggregateSources(SerCase):
@@ -388,7 +463,10 @@ class TestAggregateSources(SerCase):
         code, payload, _out, _err = self.run_json(("--json", "--no-usage"))
         self.assertEqual(code, 1)
         self.assertFalse(payload["sources"]["usage_json"]["present"])
-        self.assertEqual(payload["options"]["sources_enabled"], ["state_db"])
+        # #61: every consulted source is named, so --no-usage drops usage_json
+        # from the list instead of leaving the reader guessing what was read.
+        self.assertEqual(payload["options"]["sources_enabled"],
+                         ["state_db", "skills_index"])
         self.assertEqual(payload["counts"]["findings"], 0)
         self.assertEqual(payload["divergences"], [])
 
@@ -465,6 +543,55 @@ class TestSourceFailures(SerCase):
         )
         code, payload, _out, _err = self.run_json(("--json", "--session", "20260101_000000_abc"))
         self.assertEqual(payload["analysis"]["session_id"], "20260101_000000_abcdef")
+
+    # Achado 15: as falhas de fonte só eram verificadas em modo texto. O contrato
+    # documentado (README, tabela de códigos) diz que 2/3/4 saem com mensagem em
+    # stderr e *sem* relatório, então stdout precisa ficar vazio também em --json.
+    def test_missing_source_under_json_keeps_stdout_empty(self):
+        code, out, err = self.run_cli(("--json",))
+        self.assertEqual(code, 3)
+        self.assertEqual(out, "")
+        self.assertIn("fonte ausente", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_corrupted_source_under_json_keeps_stdout_empty(self):
+        self.box.database(raw=b"isto nao e um banco sqlite")
+        code, out, err = self.run_cli(("--json",))
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("fonte ilegível", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_ambiguous_prefix_under_json_keeps_stdout_empty(self):
+        self.box.database(sessions=[session("20260101_000000_aaaaaa"),
+                                    session("20260101_000000_bbbbbb")])
+        code, out, err = self.run_cli(("--json", "--session", "20260101_000000_"))
+        self.assertEqual(code, 3)
+        self.assertEqual(out, "")
+        self.assertIn("ambig", err.lower())
+
+    # Achado 46: a mensagem de fonte ausente carrega a referência do usuário. Ela
+    # passa pelo mesmo `redact` do relatório, senão o stderr vira via de vazamento.
+    def test_missing_source_message_redacts_the_session_reference(self):
+        self.box.database(sessions=[session("20260101_000000_aaaaaa")])
+        ref = "20261012_080613_51acc2"
+        code, out, err = self.run_cli(("--json", "--session", ref))
+        self.assertEqual(code, 3)
+        self.assertEqual(out, "")
+        self.assertIn("fonte ausente", err)
+        self.assertNotIn(ref, err)
+        self.assertIn("<session>", err)
+
+    def test_corrupted_source_message_is_redacted(self):
+        # O caminho do banco vem do usuário (--db) e não pode reaparecer cru.
+        target = self.box.root / "privado" / "state.db"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"isto nao e um banco sqlite")
+        code, out, err = self.run_cli(("--json", "--db", str(target)))
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertNotIn(str(target), err)
+        self.assertNotIn("Traceback", err)
 
 
 # ------------------------------------------------------------- window/limits
@@ -701,6 +828,42 @@ class TestCommitVerification(SerCase):
         self.assertEqual(finding["verification"]["basis"], "artifact_commit")
         self.assertEqual(finding["verification"]["detail"], sha[:12])
 
+    # Achado 44: os testes só cobriam o artefato que existe. Os dois casos
+    # negativos abaixo fixam que "caminho citado" nunca é "caminho comprovado".
+    def _invoked_with_output(self, output: str, cwd):
+        self.box.skill("alpha")
+        self.box.database(
+            sessions=[session("s1", cwd=str(cwd))],
+            messages=[
+                msg(assistant("a1", 1000.0, [script_call(script_argv("alpha"))]), "s1"),
+                msg(tool("a1-r", 1001.0, "call-1",
+                         json.dumps({"exit_code": 0, "output": output})), "s1"),
+            ],
+        )
+
+    def test_artifact_path_that_does_not_exist_does_not_prove_execution(self):
+        self._invoked_with_output("gravado em out/ghost.json", self.box.root)
+        code, payload, _out, _err = self.run_json()
+        self.assertEqual(code, 0)
+        finding = find_one(payload, "alpha")
+        self.assertEqual(finding["state"], "invoked")
+        self.assertEqual(finding["verification"]["state"], "unverifiable")
+        self.assertIsNone(finding["verification"]["basis"])
+        self.assertIn("no_correlated_artifact", finding["limitations"])
+
+    def test_artifact_outside_allowed_roots_is_ignored(self):
+        outside = self.box.root.parent / ("fora-%s.txt" % self.box.root.name)
+        outside.write_text("x", encoding="utf-8")
+        self.addCleanup(outside.unlink, missing_ok=True)
+        self._invoked_with_output("gravado em %s" % outside, self.box.root)
+        code, payload, _out, _err = self.run_json()
+        self.assertEqual(code, 0)
+        finding = find_one(payload, "alpha")
+        # O arquivo existe, mas fora das raízes permitidas (cwd/repo): não conta.
+        self.assertEqual(finding["state"], "invoked")
+        self.assertEqual(finding["verification"]["state"], "unverifiable")
+        self.assertIn("no_correlated_artifact", finding["limitations"])
+
 
 # -------------------------------------------------------------- robust inputs
 class TestRobustInputs(SerCase):
@@ -745,6 +908,152 @@ class TestRobustInputs(SerCase):
         code, payload, _out, _err = self.run_json(("--json", "--db", str(target)))
         self.assertEqual(code, 0)
         self.assertEqual(find_one(payload, "alpha")["state"], "loaded")
+
+    # Achado 78: a deduplicação só era testada com linhas byte-idênticas. Os dois
+    # casos abaixo fixam os extremos: a mesma linha relida com timestamp diferente
+    # não pode contar duas vezes, e uma chamada repetida em outro turno deve contar.
+    def test_duplicate_rows_with_distinct_timestamps_count_once(self):
+        self.box.skill("alpha")
+        pair = self.loaded_pair("alpha", "a1")
+        replayed = [dict(row, timestamp=row["timestamp"] + 0.5) for row in pair]
+        self.box.database(sessions=[session("s1")], messages=pair + replayed)
+        code, payload, _out, _err = self.run_json()
+        self.assertEqual(code, 0)
+        finding = find_one(payload, "alpha")
+        self.assertEqual(finding["counts"]["loads_ok"], 1)
+        self.assertEqual(len(finding["evidence"]), 1)
+
+    def test_same_call_repeated_in_another_turn_counts_twice(self):
+        self.box.skill("alpha")
+        self.box.database(
+            sessions=[session("s1")],
+            messages=[
+                msg(assistant("a1", 1000.0, [view_call("alpha", "call-1")]), "s1"),
+                msg(tool("a1-r", 1001.0, "call-1",
+                         json.dumps({"success": True}), name="skill_view"), "s1"),
+                msg(assistant("a2", 2000.0, [view_call("alpha", "call-2")]), "s1"),
+                msg(tool("a2-r", 2001.0, "call-2",
+                         json.dumps({"success": True}), name="skill_view"), "s1"),
+            ],
+        )
+        code, payload, _out, _err = self.run_json()
+        self.assertEqual(code, 0)
+        finding = find_one(payload, "alpha")
+        self.assertEqual(finding["counts"]["loads_ok"], 2)
+        self.assertEqual(len(finding["evidence"]), 2)
+
+    # Achado 75: o sandbox e o leitor precisam concordar sobre o schema. A
+    # checagem é comportamental: o leitor real roda sobre o banco que o sandbox
+    # constrói e precisa declará-lo compatível. Se um lado ganhar uma coluna que
+    # o outro exige, este teste falha, sem inspecionar a forma da implementação.
+    # Lacuna declarada: colunas *extras* no sandbox não são detectadas, porque o
+    # leitor ignora colunas desconhecidas por projeto.
+    def test_the_reader_accepts_the_test_fixture_schema(self):
+        self.box.skill("alpha")
+        self.box.database(sessions=[session("s1")],
+                          messages=self.loaded_pair("alpha", "a1"))
+        _code, payload, _out, _err = self.run_json()
+        schema = payload["sources"]["state_db"]["schema"]
+        self.assertTrue(schema["compatible"], schema.get("problems"))
+        self.assertEqual(schema["problems"], [])
+
+
+class TestPtVocabulary(unittest.TestCase):
+    """O vocabulário do relatório em PT-BR precisa cobrir o do classificador.
+
+    Regressão (revalidação p3): um motivo novo (`skill_script_result_unknown`)
+    ficou sem rótulo e o relatório em texto caiu no fallback, imprimindo o
+    código cru; na direção oposta, `skill_dir_only` era um rótulo sem produtor.
+    A checagem é tabela-contra-tabela: nenhuma suposição sobre a forma do
+    código, apenas que os dois vocabulários são o mesmo conjunto.
+    """
+
+    def test_every_state_reason_has_a_label_and_no_orphan_label_exists(self):
+        import classify
+        import render
+
+        self.assertEqual(
+            sorted(set(classify.STATE_REASONS) - set(render.PT_REASONS)), [])
+        self.assertEqual(
+            sorted(set(render.PT_REASONS) - set(classify.STATE_REASONS)), [])
+
+    def test_every_limitation_has_a_label_and_no_orphan_label_exists(self):
+        import classify
+        import render
+
+        self.assertEqual(
+            sorted(set(classify.LIMITATION_CODES) - set(render.PT_LIMITATIONS)), [])
+        self.assertEqual(
+            sorted(set(render.PT_LIMITATIONS) - set(classify.LIMITATION_CODES)), [])
+
+
+class TestDocVocabulary(unittest.TestCase):
+    """A documentação de motivos precisa espelhar o vocabulário do código.
+
+    Regressão (tratamento da revisão do PR #6): a linha 7 da tabela de decisão
+    prometia `edit_without_load` como `state_reason`, mas o classificador emite
+    `skill_manage_only` e reserva `edit_without_load` para *limitação*. Nenhum
+    teste acusava a divergência, porque a checagem existente só comparava código
+    com os rótulos PT-BR. Aqui a checagem é documento-contra-tabela: lê a
+    referência e exige que cada código citado exista de fato no emissor.
+    """
+
+    DOC = (pathlib.Path(__file__).resolve().parents[1]
+           / "references" / "evidence-rules.md")
+
+    @classmethod
+    def _text(cls):
+        return cls.DOC.read_text(encoding="utf-8")
+
+    @classmethod
+    def _codes_after(cls, label):
+        """Códigos entre crases no parágrafo que segue ``label``."""
+        tail = cls._text().split(label, 1)[1]
+        return set(re.findall(r"`([a-z_]+)`", tail.split("\n\n", 1)[0]))
+
+    @classmethod
+    def _table_reasons(cls):
+        reasons = set()
+        for line in cls._text().splitlines():
+            cells = [cell.strip() for cell in line.split("|")[1:-1]]
+            if len(cells) == 4 and re.fullmatch(r"\d+", cells[0]):
+                reasons.add(cells[3].strip("`"))
+        return reasons
+
+    def test_the_decision_table_only_names_real_state_reasons(self):
+        import classify
+
+        reasons = self._table_reasons()
+        self.assertTrue(reasons, "a tabela de decisão não foi encontrada")
+        self.assertEqual(sorted(reasons - set(classify.STATE_REASONS)), [])
+
+    def test_the_documented_limitations_are_the_real_ones(self):
+        import classify
+
+        self.assertEqual(self._codes_after("`limitations` (codes):"),
+                         set(classify.LIMITATION_CODES))
+
+    def test_the_documented_unknowns_are_real_and_emitted(self):
+        """Todo ``unknown`` documentado precisa ter rótulo e produtor.
+
+        `PT_UNKNOWNS` não serve como vocabulário fechado: ele repete
+        `artifact_check_disabled`, que também é limitação. Então a checagem é
+        duas direções parciais: o código tem rótulo PT-BR e aparece como
+        literal nos scripts (ou seja, algo realmente o emite). É a direção que
+        pega o defeito observado: a doc prometia o que nenhum código produzia.
+        """
+        import render
+
+        documented = self._codes_after("`unknowns` (codes):")
+        self.assertTrue(documented, "a lista de unknowns não foi encontrada")
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(SCRIPTS_DIR.glob("*.py"))
+        )
+        for code in sorted(documented):
+            with self.subTest(code=code):
+                self.assertIn(code, render.PT_UNKNOWNS)
+                self.assertIn('"%s"' % code, source)
 
 
 if __name__ == "__main__":

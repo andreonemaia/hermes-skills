@@ -19,10 +19,10 @@ from _common import (
     dumps,
     iso,
     iso_local,
+    parse_iso,
 )
 
 PT_REASONS = {
-    "skill_dir_only": "a skill existe no índice, mas não há registro de uso nesta janela",
     "mention_only": "o nome aparece em texto, o que não comprova carregamento nem execução",
     "skill_view_ok": "carregamento confirmado por chamada skill_view bem-sucedida",
     "skill_view_failed": "apenas tentativas de carregamento, todas com erro observado",
@@ -30,6 +30,7 @@ PT_REASONS = {
     "skill_script_failed": "script da skill foi executado, mas com falha observada",
     "skill_script_ok": "script da skill foi executado com sucesso, sem artefato correlacionado",
     "skill_script_ok_verified_artifact": "script da skill executado com sucesso e artefato verificado",
+    "skill_script_result_unknown": "script da skill foi invocado, mas o resultado não foi observado",
     "usage_counter_only": "existe apenas contador agregado, sem vínculo com esta sessão",
     "empty_transcript": "nenhuma evidência observável",
 }
@@ -70,6 +71,18 @@ def sanitize_tree(obj: object) -> object:
     return obj
 
 
+def _fact_int(scope: dict, key: str) -> int:
+    """Read a numeric fact defensively.
+
+    A structurally odd scope (``facts`` missing, or a counter stored as a
+    string) must not abort the whole report: non-integer values count as 0.
+    """
+    value = (scope.get("facts") or {}).get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value
+
+
 def build_report(*, generated_at: str, session: dict, scopes: list[dict],
                  findings: list[dict], divergences: list[dict],
                  available_names: list[str], usage: dict, index_roots: list[str],
@@ -107,17 +120,16 @@ def build_report(*, generated_at: str, session: dict, scopes: list[dict],
     cost_status = session.get("cost_status")
     if str(cost_status or "").lower() not in ("known", "actual", "estimated", "confirmed"):
         unknowns.append("cost_unavailable")
-    if duration is None:
+    if ended is None:
         unknowns.append("session_in_progress")
     if usage.get("present"):
         unknowns.append("usage_counters_are_global")
     if not options.get("include_children"):
         unknowns.append("children_excluded")
-    unattributed = sum(scope.get("facts", {}).get("unattributed_tool_results", 0)
-                       for scope in scopes)
+    unattributed = sum(_fact_int(scope, "unattributed_tool_results") for scope in scopes)
     if unattributed:
         unknowns.append("unattributed_tool_results")
-    orphan_skill_events = sum(scope.get("facts", {}).get("skill_events_without_call", 0)
+    orphan_skill_events = sum(_fact_int(scope, "skill_events_without_call")
                               for scope in scopes)
     if orphan_skill_events:
         unknowns.append("skill_events_without_call")
@@ -137,8 +149,10 @@ def build_report(*, generated_at: str, session: dict, scopes: list[dict],
             "period": period,
             "include_children": bool(options.get("include_children")),
             "children_analysed": [scope["session_id"] for scope in scopes
-                                  if scope.get("scope") != "main"],
-            "counters_are_global": True,
+                                  if str(scope.get("scope") or "").startswith("child:")],
+            # The .usage.json counters are global by nature; with no usage file
+            # there are no counters to qualify, so the flag follows presence.
+            "counters_are_global": bool(usage.get("present")),
         },
         "sources": sources,
         "options": {
@@ -173,7 +187,6 @@ def _fmt_ts(value: str | None) -> str:
     if not value:
         return "não disponível"
     try:
-        from _common import parse_iso
         return iso_local(parse_iso(value)) or "não disponível"
     except ValueError:
         return value
@@ -185,7 +198,10 @@ def _fmt_state(state: str) -> str:
 
 def _fmt_evidence(item: dict) -> list[str]:
     kind = item.get("kind")
-    label = EVIDENCE_LABELS_PT.get(kind, str(kind))
+    # A missing kind must not be rendered as the literal string "None".
+    label = EVIDENCE_LABELS_PT.get(kind) if isinstance(kind, str) else None
+    if not label:
+        label = "evento sem tipo declarado"
     when = _fmt_ts(item.get("at"))
     line = "    - %s em %s" % (label, when)
     if item.get("tool"):

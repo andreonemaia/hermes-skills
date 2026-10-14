@@ -3,7 +3,9 @@
 Everything in this module observes; nothing writes. The database is opened with
 ``mode=ro`` plus ``PRAGMA query_only``, transcript rows are read in bounded
 batches and only the first few kilobytes of each message body are pulled from
-SQLite so a long session never lands in memory in full.
+SQLite, so no message body is ever held in memory in full. What does grow with
+the session is one short uid string per message, kept to drop the duplicate
+display variants Hermes stores for the same logical message.
 """
 
 from __future__ import annotations
@@ -25,8 +27,13 @@ from _common import (
 
 BATCH = 200
 CONTENT_CHARS = 4000
+#: Error strings are quoted in the report, so they are clipped like excerpts.
+MAX_ERROR = 120
 MAX_ARTIFACT_CANDIDATES = 6
 MAX_COMMIT_CANDIDATES = 3
+#: Stand-in text for a successful ``skill_manage`` whose result carries no
+#: prose of its own. It is not transcript content and is flagged as such.
+SYNTHETIC_EXCERPT = "operações aplicadas"
 
 #: Columns without which the transcript cannot be interpreted. A different
 #: Hermes schema is reported as corrupt instead of guessed at.
@@ -48,11 +55,19 @@ REQUIRED_COLUMNS = {
 #: assistant turn visible (a truncated list would silently drop calls).
 TOOL_CALL_CHARS = 20000
 
+#: Session columns the report reads. The SELECT and the row labels are both
+#: built from this, so they cannot drift apart and mislabel a field.
+SESSION_COLUMNS = tuple(sorted(REQUIRED_COLUMNS["sessions"]))
+
+#: The unbounded lengths travel with the bounded heads so that a payload cut
+#: by the read window can be reported instead of silently losing evidence.
 MESSAGE_COLUMNS = (
     "id, message_uid, role, tool_name, tool_call_id, timestamp, active, "
     "compacted, display_kind, "
     "substr(coalesce(content, ''), 1, %d) AS content_head, "
-    "substr(coalesce(tool_calls, ''), 1, %d) AS tool_calls_head"
+    "substr(coalesce(tool_calls, ''), 1, %d) AS tool_calls_head, "
+    "length(coalesce(content, '')) AS content_chars, "
+    "length(coalesce(tool_calls, '')) AS tool_calls_chars"
     % (CONTENT_CHARS, TOOL_CALL_CHARS)
 )
 
@@ -73,11 +88,17 @@ class SkillIndex:
     folders (``skills/creative/...``) are therefore skipped naturally, and only
     known names are ever used for attribution, which keeps paths that merely
     look like skills (``skills/docs/``) out of the report.
+
+    When two roots hold a skill of the same name the first root wins. The name
+    is listed in ``conflicts`` so a caller can warn about the ambiguity instead
+    of silently attributing an event to the wrong copy.
     """
 
     def __init__(self, names: dict[str, str], roots: list[str]):
         self.names = dict(names)
         self.roots = list(roots)
+        #: name -> every root that carries it, for names carried by more than one.
+        self.conflicts: dict[str, list[str]] = {}
 
     #: Category folders (``skills/creative/...``) nest skills one or two levels
     #: below the root, so the scan walks down a bounded number of levels.
@@ -86,14 +107,17 @@ class SkillIndex:
     @classmethod
     def scan(cls, roots: list[str]) -> "SkillIndex":
         names: dict[str, str] = {}
+        sources: dict[str, list[str]] = {}
         for root in roots:
             if not root or not os.path.isdir(root):
                 continue
-            cls._walk(root, root, names, 0)
-        return cls(names, roots)
+            cls._walk(root, root, names, sources, 0)
+        index = cls(names, roots)
+        index.conflicts = {name: roots_ for name, roots_ in sources.items() if len(roots_) > 1}
+        return index
 
     @classmethod
-    def _walk(cls, root: str, path: str, names: dict, depth: int) -> None:
+    def _walk(cls, root: str, path: str, names: dict, sources: dict, depth: int) -> None:
         if depth > cls.MAX_DEPTH:
             return
         try:
@@ -107,9 +131,14 @@ class SkillIndex:
             if os.path.islink(candidate) or not os.path.isdir(candidate):
                 continue
             if os.path.isfile(os.path.join(candidate, "SKILL.md")):
+                # First root wins, but every root is remembered so the
+                # ambiguity is reportable rather than silent.
+                sources.setdefault(entry, [])
+                if root not in sources[entry]:
+                    sources[entry].append(root)
                 names.setdefault(entry, root)
                 continue  # never look for skills inside a skill
-            cls._walk(root, candidate, names, depth + 1)
+            cls._walk(root, candidate, names, sources, depth + 1)
 
     def has(self, name: str) -> bool:
         return name in self.names
@@ -157,13 +186,28 @@ def commit_exists(repo: str, sha: str) -> bool:
     return out.returncode == 0
 
 
+def _like_prefix(ref: str) -> str:
+    """``ref`` as a LIKE prefix with ``%``, ``_`` and ``\\`` taken literally.
+
+    Session ids are hex, but an operator can paste anything; unescaped, a ``_``
+    matches any character and resolves a session that was never asked for.
+    """
+    escaped = ref.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return escaped + "%"
+
+
 class StateDb:
     """Read-only view over the Hermes ``state.db`` transcript store."""
 
     def __init__(self, path: str):
         self.path = path
         self.conn = open_ro(path)
-        self.schema = self._check_schema()
+        try:
+            self.schema = self._check_schema()
+        except Exception:
+            # A rejected schema must not leave the read-only handle open.
+            self.close()
+            raise
 
     def close(self) -> None:
         try:
@@ -194,27 +238,38 @@ class StateDb:
                 report["problems"].append(
                     "table %s missing columns: %s" % (table, ", ".join(missing))
                 )
+        for table, column in (("sessions", "started_at"),
+                              ("messages", "timestamp")):
+            info = report["tables"].get(table, {})
+            # A missing table or column is already reported above; probing it
+            # here would raise instead of reporting.
+            if not info.get("present") or column in info.get("missing", ()):
+                continue
+            # SQLite sorts TEXT after every number, so a text timestamp would
+            # silently distort the since/until window instead of failing.
+            bad = self.conn.execute(
+                "SELECT 1 FROM %s WHERE %s IS NOT NULL AND "
+                "typeof(%s) NOT IN ('integer', 'real') LIMIT 1"
+                % (table, column, column)
+            ).fetchone()
+            if bad:
+                report["compatible"] = False
+                report["problems"].append(
+                    "table %s has non-numeric %s values" % (table, column))
         if not report["compatible"]:
             raise SourceCorrupt("; ".join(report["problems"]))
         return report
 
     # ---------------------------------------------------------------- sessions
     def session(self, session_id: str) -> dict | None:
-        row = self.conn.execute(
-            "SELECT id, source, title, started_at, ended_at, message_count, "
-            "tool_call_count, parent_session_id, cwd, git_repo_root, git_branch, "
-            "hidden, archived, estimated_cost_usd, actual_cost_usd, cost_status, "
-            "input_tokens, output_tokens "
-            "FROM sessions WHERE id = ?",
+        cursor = self.conn.execute(
+            "SELECT %s FROM sessions WHERE id = ?" % ", ".join(SESSION_COLUMNS),
             (session_id,),
-        ).fetchone()
-        return dict(zip(
-            ("id", "source", "title", "started_at", "ended_at", "message_count",
-             "tool_call_count", "parent_session_id", "cwd", "git_repo_root",
-             "git_branch", "hidden", "archived", "estimated_cost_usd",
-             "actual_cost_usd", "cost_status", "input_tokens", "output_tokens"),
-            row,
-        )) if row else None
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return dict(zip((column[0] for column in cursor.description), row))
 
     def require_session(self, session_id: str) -> dict:
         found = self.session(session_id)
@@ -223,7 +278,12 @@ class StateDb:
         return found
 
     def resolve_session(self, ref: str | None) -> dict:
-        """Resolve ``latest``, an exact id or a unique id prefix."""
+        """Resolve ``latest``, an exact id or a unique id prefix.
+
+        ``latest`` deliberately skips hidden sessions; an explicit reference
+        (exact id or prefix) resolves whatever matches, hidden ones included,
+        because the caller named that session on purpose.
+        """
         if ref in (None, "", "latest"):
             row = self.conn.execute(
                 "SELECT id FROM sessions WHERE coalesce(hidden, 0) = 0 "
@@ -236,8 +296,9 @@ class StateDb:
         if exact is not None:
             return exact
         rows = self.conn.execute(
-            "SELECT id FROM sessions WHERE id LIKE ? ORDER BY id DESC LIMIT 5",
-            (ref + "%",),
+            "SELECT id FROM sessions WHERE id LIKE ? ESCAPE '\\' "
+            "ORDER BY id DESC LIMIT 5",
+            (_like_prefix(ref),),
         ).fetchall()
         if len(rows) == 1:
             return self.require_session(rows[0][0])
@@ -271,6 +332,10 @@ class StateDb:
         sql += " ORDER BY id ASC"
         cursor = self.conn.execute(sql, params)
         columns = [d[0] for d in cursor.description]
+        #: One short uid per message already yielded. This is the only
+        #: structure here that grows with the session: dropping a uid far from
+        #: its twin would re-count a duplicate row, so the trade-off is kept
+        #: and declared in the module docstring instead of hidden.
         seen: set[str] = set()
         while True:
             batch = cursor.fetchmany(BATCH)
@@ -332,7 +397,12 @@ def parse_tool_calls(raw: str) -> list[dict]:
 
 
 SUCCESS_RE = re.compile(r'"success"\s*:\s*(true|false)')
-ERROR_FIELD_RE = re.compile(r'"(error|exception|traceback)"\s*:')
+#: The value group keeps ``"error": null`` from being read as an error; over a
+#: cut-off body no heuristic can do better than this.
+ERROR_FIELD_RE = re.compile(r'"(error|exception|traceback)"\s*:\s*(?!null\b)(\S)')
+#: ``skill_view`` echoes the skill name at the top of its payload, which is what
+#: makes an orphaned result attributable at all.
+NAME_FIELD_RE = re.compile(r'"name"\s*:\s*"([^"\\]{1,64})"')
 
 
 def parse_tool_result(raw: str) -> dict:
@@ -351,7 +421,9 @@ def _salvage_truncated(raw: str) -> dict:
 
     A large tool result exceeds ``CONTENT_CHARS``, so the body is not valid
     JSON any more. The outcome lives in the first bytes, which is all the
-    report needs; anything further is deliberately not guessed at.
+    report needs; anything further is deliberately not guessed at. The window
+    is searched, not parsed, so a field quoted inside a document body that the
+    result happens to contain can be mistaken for the result's own outcome.
     """
     out: dict = {"_raw": raw, "_truncated": True}
     match = SUCCESS_RE.search(raw[:512])
@@ -359,6 +431,9 @@ def _salvage_truncated(raw: str) -> dict:
         out["success"] = match.group(1) == "true"
     if ERROR_FIELD_RE.search(raw[:2048]):
         out["error"] = "resultado truncado; campo de erro presente"
+    name = NAME_FIELD_RE.search(raw[:1024])
+    if name:
+        out["name"] = name.group(1)
     return out
 
 
@@ -382,6 +457,32 @@ def skills_in_text(text: str, index: SkillIndex) -> list[str]:
     return found
 
 
+def native_path(raw: str) -> str:
+    """Translate an MSYS ``/c/...`` drive path into the ``C:\\...`` form.
+
+    Output captured from the git-bash shell Hermes runs in uses POSIX drive
+    paths, which ``ntpath.isabs`` rejects; unhandled they would be read as
+    relative and joined onto a root that cannot contain them.
+    """
+    match = re.match(r"^/([A-Za-z])/(.*)$", raw or "")
+    if not match:
+        return raw
+    return "%s:\\%s" % (match.group(1).upper(), match.group(2).replace("/", "\\"))
+
+
+def inside_root(path: str, root: str) -> bool:
+    """True when ``path`` sits inside ``root``; both are already normalised.
+
+    ``os.path.commonpath`` raises ``ValueError`` for paths on different drives,
+    or when one is drive-relative and the other is not. A candidate the
+    comparison cannot place is outside every root, which is the safe answer.
+    """
+    try:
+        return os.path.commonpath([os.path.normpath(root), path]) == os.path.normpath(root)
+    except ValueError:
+        return False
+
+
 def artifact_paths(text: str, roots: list[str]) -> list[str]:
     """Existing files referenced in tool output, resolved under ``roots``.
 
@@ -393,16 +494,13 @@ def artifact_paths(text: str, roots: list[str]) -> list[str]:
     bases = [r for r in roots if r and os.path.isdir(r)]
     seen: list[str] = []
     for match in PATH_RE.finditer(text):
-        raw = match.group(1)
+        raw = native_path(match.group(1))
         if raw.startswith("<") or "..." in raw:
             continue
         candidates = [raw] if os.path.isabs(raw) else [os.path.join(b, raw) for b in bases]
         for candidate in candidates:
             normalised = os.path.normpath(candidate)
-            if not any(
-                os.path.commonpath([os.path.normpath(b), normalised]) == os.path.normpath(b)
-                for b in bases
-            ):
+            if not any(inside_root(normalised, b) for b in bases):
                 continue
             if os.path.isfile(normalised) and normalised not in seen:
                 seen.append(normalised)
@@ -447,6 +545,9 @@ def collect_session_events(db: StateDb, session: dict, index: SkillIndex,
         "messages": 0,
         "active_messages": 0,
         "compacted_messages": 0,
+        "truncated_messages": 0,
+        "truncated_tool_call_messages": 0,
+        "truncated_events": 0,
         "unattributed_tool_results": 0,
         "skill_events_without_call": 0,
         "span": None,
@@ -467,18 +568,31 @@ def collect_session_events(db: StateDb, session: dict, index: SkillIndex,
             facts["active_messages"] += 1
         role = row.get("role")
         ts = row.get("timestamp")
+        content_cut = (row.get("content_chars") or 0) > CONTENT_CHARS
+        calls_cut = (row.get("tool_calls_chars") or 0) > TOOL_CALL_CHARS
+        if content_cut:
+            facts["truncated_messages"] += 1
+        if calls_cut:
+            facts["truncated_tool_call_messages"] += 1
         if role == "assistant":
             for call in parse_tool_calls(row.get("tool_calls_head") or ""):
-                call_id = str(call.get("call_id"))
-                known_calls.add(call_id)
+                # A call with no id cannot be matched to a result later. Keying
+                # it as the literal "None" would make two such calls collide
+                # and swap their results, so it is left unattributable instead.
+                call_id = call.get("call_id") or None
+                if call_id:
+                    known_calls.add(call_id)
                 evidence = attribute_call(call, row, index, scope, ts)
                 if evidence is None:
                     continue
-                pending[call_id] = evidence
+                if calls_cut:
+                    evidence["truncated"] = True
+                if call_id:
+                    pending[call_id] = evidence
                 events.append(evidence)
         elif role == "tool":
             result = parse_tool_result(row.get("content_head") or "")
-            call_id = str(row.get("tool_call_id"))
+            call_id = row.get("tool_call_id") or None
             evidence = pending.pop(call_id, None)
             if evidence is None:
                 evidence = attribute_result(row, result, index, scope, ts)
@@ -489,18 +603,23 @@ def collect_session_events(db: StateDb, session: dict, index: SkillIndex,
                 # A skill-related result whose call is not in the window: the
                 # load happened outside the transcript, so the call itself is
                 # reported as unverifiable instead of being invented.
-                if call_id not in known_calls:
+                if not call_id or call_id not in known_calls:
                     facts["skill_events_without_call"] += 1
                 events.append(evidence)
             apply_result(evidence, result, row, roots, repo, verify_artifacts)
-        elif role in ("user", "assistant"):
-            # Only conversational turns can "mention" a skill. System/context
-            # rows carry the whole skill index and would mark every skill.
+        if role in ("user", "assistant"):
+            # Both conversational roles can "mention" a skill in prose, so this
+            # is not an ``elif``: an assistant turn is consumed above by its
+            # tool calls and would otherwise never be read for mentions.
+            # System/context rows carry the whole skill index and would mark
+            # every skill, so they stay out.
             text = row.get("content_head") or ""
             if role == "assistant":
+                # The assistant body carries its tool-call payload; its
+                # arguments must not be read as prose.
                 text = strip_tool_call_json(text)
             for name in skills_in_text(text, index):
-                events.append({
+                mention = {
                     "kind": "mention",
                     "skill": name,
                     "at": iso(ts),
@@ -511,8 +630,12 @@ def collect_session_events(db: StateDb, session: dict, index: SkillIndex,
                     "source": "state_db",
                     "role": role,
                     "detail": "skills/%s/" % name,
-                })
+                }
+                if content_cut:
+                    mention["truncated"] = True
+                events.append(mention)
 
+    facts["truncated_events"] = sum(1 for event in events if event.get("truncated"))
     facts["span"] = db.message_span(session_id)
     return events, facts
 
@@ -558,14 +681,15 @@ def attribute_call(call: dict, row: dict, index: SkillIndex, scope: str,
         if len(targets) > 1:
             event["related_skills"] = targets[1:]
         return event
-    matched = skills_in_text(json.dumps(args, ensure_ascii=False), index)
+    raw_args = json.dumps(args, ensure_ascii=False)
+    matched = skills_in_text(raw_args, index)
     if not matched:
         return None
     event: dict[str, object] = dict(
         base,
         kind="skill_script",
         skill=matched[0],
-        detail=matched_path(json.dumps(args, ensure_ascii=False), matched[0]),
+        detail=matched_path(raw_args, matched[0]),
     )
     if len(matched) > 1:
         event["related_skills"] = matched[1:]
@@ -604,15 +728,37 @@ def attribute_result(row: dict, result: dict, index: SkillIndex, scope: str,
         "call_id": row.get("tool_call_id"),
         "detail": "skill_view(%s)" % target,
         "orphan_result": True,
+        # The result is real, but no call for it was observed in the window, so
+        # the load cannot be confirmed from this transcript alone.
+        "limitations": ["out_of_transcript_load"],
     }
+
+
+def _apply_error(evidence: dict[str, object], error: object) -> None:
+    """Record a failure field; an explicit error outranks every other signal.
+
+    ``ok`` and ``basis`` are always written together, so a success flag can
+    never survive next to a contradictory ``basis``.
+    """
+    if not error:
+        return
+    evidence["ok"] = False
+    evidence["basis"] = "error_field"
+    evidence["error"] = redact(str(error), MAX_ERROR)
 
 
 def apply_result(evidence: dict[str, object], result: dict, row: dict, roots: list[str],
                  repo: str | None, verify_artifacts: bool) -> None:
-    """Attach the observable outcome of a tool result to its observation."""
+    """Attach the observable outcome of a tool result to its observation.
+
+    The same precedence holds for every ``kind``: an ``error`` field means the
+    call failed, so it outranks ``success`` and ``exit_code`` alike.
+    """
     kind = evidence["kind"]
     if result.get("_truncated"):
         evidence["result_truncated"] = True
+    if (row.get("content_chars") or 0) > CONTENT_CHARS:
+        evidence["truncated"] = True
     if kind in ("skill_view", "skill_manage"):
         success = result.get("success")
         if isinstance(success, bool):
@@ -621,30 +767,28 @@ def apply_result(evidence: dict[str, object], result: dict, row: dict, roots: li
         elif row.get("display_kind") == "failed_turn":
             evidence["ok"] = False
             evidence["basis"] = "failed_turn"
-        if result.get("error"):
-            evidence["ok"] = False
-            evidence["basis"] = evidence.get("basis") or "error_field"
-            evidence["error"] = redact(str(result.get("error")), 120)
+        _apply_error(evidence, result.get("error"))
         excerpt = result.get("description") or result.get("message")
-        if not excerpt and kind == "skill_manage":
-            excerpt = "operações aplicadas" if evidence.get("ok") else None
-        if excerpt:
+        if not excerpt and kind == "skill_manage" and evidence.get("ok"):
+            # Not transcript content: flagged so it is never read as a quote.
+            evidence["excerpt"] = SYNTHETIC_EXCERPT
+            evidence["excerpt_synthetic"] = True
+        elif excerpt:
             evidence["excerpt"] = redact(str(excerpt))
         return
     if kind != "skill_script":
         return
     exit_code = result.get("exit_code")
-    if isinstance(exit_code, int):
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool):
         evidence["ok"] = exit_code == 0
         evidence["basis"] = "exit_code"
         evidence["exit_code"] = exit_code
     elif row.get("display_kind") == "failed_turn":
         evidence["ok"] = False
         evidence["basis"] = "failed_turn"
-    if result.get("error"):
-        evidence["error"] = redact(str(result.get("error")), 120)
+    _apply_error(evidence, result.get("error"))
     output = result.get("output")
-    if output is None and result.get("_raw"):
+    if not output and result.get("_raw"):
         output = result.get("_raw")
     if isinstance(output, str):
         evidence["excerpt"] = redact(output, MAX_EXCERPT)
