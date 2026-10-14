@@ -61,6 +61,7 @@ hermes-skills/
 | [`independent-code-review`](skills/independent-code-review/) | Faz a revisão de código com um processo revisor separado, isolado e estritamente somente leitura. Cobre pull requests do GitHub, diffs de branch, mudanças em staging e mudanças não preparadas. | windows | 1.0.0 |
 | [`comfyui-model-manager`](skills/comfyui-model-manager/) | Inventaria, verifica e baixa arquivos de modelo do ComfyUI a partir de um manifesto SHA-256, e valida workflows estaticamente antes de executá-los. Complementa a skill oficial `comfyui`. | windows | 0.1.0 |
 | [`task-checkpoint-recovery`](skills/task-checkpoint-recovery/) | Persiste e revalida o estado lógico e operacional de uma tarefa longa (objetivo, passos, decisões, bloqueios, próximas ações e um registro das operações com efeito colateral), para que ela possa ser interrompida e retomada sem perder decisões nem repetir trabalho já feito. Complementa as sessões nativas, os checkpoints de arquivo e a compactação de contexto. | windows | 0.1.0 |
+| [`skill-execution-report`](skills/skill-execution-report/) | Reconstrói, a partir do `state.db` e do `.usage.json` do Hermes, **o que realmente aconteceu com cada skill** em uma sessão: qual foi apenas mencionada (`discovered`), qual foi carregada (`loaded`), qual foi invocada mesmo sem resultado observado (`invoked`), qual teve execução comprovada por artefato verificado (`execution_proven`) e qual não tem evidência atribuível (`unverifiable`). Estritamente somente leitura, com classificação conservadora e evidência citada. | windows | 0.1.0 |
 
 ### `independent-code-review`
 
@@ -107,6 +108,28 @@ Salve um checkpoint desta tarefa antes de eu encerrar a sessão.
 ```
 
 **Detalhes:** [README da skill](skills/task-checkpoint-recovery/README.md)
+
+### `skill-execution-report`
+
+**Finalidade:** responder, com evidência em mãos, à pergunta "essa skill foi
+mesmo executada?" Lendo o `state.db` (transcrições) e o `.usage.json`
+(contadores) do Hermes em modo **somente leitura**, a skill reconstrói o que
+aconteceu com cada skill em uma sessão e separa as situações que costumam ser
+confundidas: `discovered` (o nome aparece nos registros), `loaded`
+(`skill_view` com sucesso observado), `invoked` (chamada atribuível à skill,
+mesmo com resultado desconhecido ou falha) e `execution_proven` (sucesso com
+artefato verificado). `available` é vocabulário documental — nunca aparece como
+achado — e `unverifiable` marca o sinal que existe mas não é atribuível a um
+estado verificado. Nada é inferido sem evidência atribuível: resultado
+desconhecido nunca vira sucesso implícito.
+
+**Exemplo de pedido:**
+
+```
+Rode skill-execution-report na sessão atual e me diga quais skills foram realmente executadas, com as evidências.
+```
+
+**Detalhes:** [README da skill](skills/skill-execution-report/README.md)
 
 ## Instalando uma skill manualmente
 
