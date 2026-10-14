@@ -29,7 +29,8 @@ skill é o campo `version` do seu próprio `SKILL.md`.
 ### Fixed
 
 - `skill-execution-report` (0.1.0): tratamento da revisão independente do PR #6 —
-  66 achados confirmados corrigidos e 7 rejeitados com justificativa técnica
+  88 achados tratados: 69 confirmados (67 integrais, 2 parciais) corrigidos, 7
+  rejeitados por contrariarem o contrato aprovado e 12 informativos avaliados.
   Entre as correções: resultado de
   `skill_script` não observado deixou de virar sucesso implícito (novo motivo
   `skill_script_result_unknown`); `EXIT_OUTPUT = 5` separa `--out` não gravável de
