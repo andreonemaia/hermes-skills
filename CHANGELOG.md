@@ -37,6 +37,16 @@ skill é o campo `version` do seu próprio `SKILL.md`.
 
 ### Added
 
+- Skill `skill-execution-report` (0.1.0): reconstrói, a partir do `state.db` e do
+  `.usage.json` do Hermes, o que realmente aconteceu com cada skill em uma sessão,
+  separando "disponível", "mencionada", "carregada" (`skill_view`) e "executada",
+  e marcando como não verificável tudo o que não tem evidência atribuível. Somente
+  leitura (nunca escreve no `state.db` nem altera contadores nativos), saída em
+  JSON determinístico e relatório humano derivado dele, classificação
+  conservadora, trechos de evidência higienizados, opção `--include-children`
+  para incluir sessões filhas e `SER_NOW` para testes determinísticos. Somente
+  biblioteca padrão; acompanha uma suíte `unittest` hermética (SQLite sintético e
+  diretórios temporários, sem tocar sessões reais). Testada no Windows.
 - Skill `task-checkpoint-recovery` (0.1.0): persiste o estado lógico e
   operacional de uma tarefa longa (objetivo, passos, decisões, bloqueios,
   próximas ações e um registro das operações que produzem efeitos) em
