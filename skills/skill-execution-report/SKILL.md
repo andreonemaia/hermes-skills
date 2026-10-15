@@ -71,6 +71,10 @@ python scripts/report.py --session latest --json --out report.json
 python scripts/report.py --session latest --no-usage --no-artifact-check
 ```
 
+Session identifiers in these examples are synthetic (`20260101_000000_abc123`),
+in the same format as real ones; pass the id or unique prefix of the session you
+want to analyse.
+
 | Flag | Effect | Default |
 |---|---|---|
 | `--session REF` | full id, unique id prefix, or `latest` | `latest` |

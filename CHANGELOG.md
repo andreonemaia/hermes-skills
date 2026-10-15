@@ -38,8 +38,9 @@ skill é o campo `version` do seu próprio `SKILL.md`.
   há outro artefato correlacionado verificável. Esquema, nomes de classificação e
   saída permanecem idênticos.
 - Exemplos de sessão na documentação e nos testes passam a usar identificadores
-  explicitamente sintéticos, no mesmo formato dos identificadores reais; o teste
-  de redação do identificador no `stderr` mantém as mesmas asserções.
+  explicitamente sintéticos, no mesmo formato dos identificadores reais, e o
+  `SKILL.md` rotula os identificadores dos exemplos como sintéticos; o teste de
+  redação do identificador no `stderr` mantém as mesmas asserções.
 
 ### Fixed
 
