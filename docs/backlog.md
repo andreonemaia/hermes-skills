@@ -22,28 +22,36 @@ evidência de um que o escreveu.
 
 ### Proposta
 
-Separar quatro afirmações, hoje colapsadas:
+Separar quatro afirmações, hoje colapsadas. São quatro afirmações a separar
+futuramente: **atualmente apenas as duas primeiras são combinadas**, e só elas,
+em `execution_proven`.
 
-1. **Invocação comprovada de ferramenta:** a chamada aconteceu e o resultado foi
-   observado (hoje coberto por `invoked`).
+1. **Invocação comprovada de ferramenta:** uma chamada atribuível à skill foi
+   observada (hoje coberto por `invoked`). O resultado pode ser sucesso, falha ou
+   desconhecido: observar o resultado não é obrigatório para reconhecer a
+   invocação.
 2. **Existência verificada de artefato:** o arquivo ou commit referenciado existe
    no momento da verificação (hoje coberto por `artifact_file` e
    `artifact_commit`).
-3. **Modificação observada de artefato:** o artefato foi alterado em decorrência
-   da execução (novo).
-4. **Proveniência causal comprovada da modificação:** a alteração é atribuível
-   àquela execução específica, e não a outra origem (novo).
+3. **Modificação observada de artefato:** uma mudança foi detectada entre
+   observações do artefato, sem atribuição causal automática (novo).
+4. **Proveniência causal comprovada da modificação:** há evidências que sustentam
+   atribuir essa mudança àquela execução específica, e não a outra origem (novo).
 
-Evidências candidatas para os níveis 3 e 4:
+Os níveis 3 e 4 são independentes: detectar uma mudança não diz quem a causou.
+Diferenças de conteúdo, hashes ou snapshots, isoladamente, não comprovam quem
+alterou o artefato. Eles sustentam o nível 3 e só passam a sustentar o nível 4
+quando acompanhados de correlação com a execução específica.
 
-- **diff** do arquivo antes e depois, quando houver cópia ou histórico
-  disponível;
-- **snapshots antes e depois**, capturados em torno da execução;
-- **hashes** (tamanho, mtime, SHA-256) comparados entre antes e depois;
-- **registros de escrita** emitidos pela própria ferramenta, por exemplo um
-  caminho de arquivo na saída acompanhado de um evento de escrita;
-- **correlação com IDs de execução** (por exemplo `tool_call_id`), ligando a
-  alteração à chamada que a produziu.
+Evidências candidatas:
+
+- **Nível 3 (mudança observada):** diff do arquivo antes e depois, quando houver
+  cópia ou histórico disponível; snapshots antes e depois, capturados em torno da
+  execução; hashes (tamanho, mtime, SHA-256) comparados entre antes e depois.
+- **Nível 4 (proveniência causal):** registros de escrita emitidos pela própria
+  ferramenta, por exemplo um caminho de arquivo na saída acompanhado de um evento
+  de escrita; correlação com IDs de execução (por exemplo `tool_call_id`), ligando
+  a alteração à chamada que a produziu.
 
 ### Restrições de compatibilidade
 

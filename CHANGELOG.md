@@ -31,8 +31,15 @@ skill é o campo `version` do seu próprio `SKILL.md`.
   `artifact_file` comprova apenas a existência do arquivo referenciado no momento
   da verificação, que `execution_proven` não comprova criação, modificação nem
   autoria do artefato, e que a indisponibilidade de uma fonte pode tornar
-  evidências não verificáveis sem significar que a execução não ocorreu. Esquema,
-  nomes de classificação e saída permanecem idênticos.
+  evidências não verificáveis sem significar que a execução não ocorreu. A
+  ausência de repositório só impede a verificação de commits por esse mecanismo:
+  um arquivo verificável sob uma base permitida, como o `cwd` da sessão, ainda
+  sustenta `execution_proven`, e a chamada permanece `invoked` apenas quando não
+  há outro artefato correlacionado verificável. Esquema, nomes de classificação e
+  saída permanecem idênticos.
+- Exemplos de sessão na documentação e nos testes passam a usar identificadores
+  explicitamente sintéticos, no mesmo formato dos identificadores reais; o teste
+  de redação do identificador no `stderr` mantém as mesmas asserções.
 
 ### Fixed
 

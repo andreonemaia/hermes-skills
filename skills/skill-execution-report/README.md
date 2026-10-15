@@ -32,9 +32,11 @@ contadores de fontes diferentes (`.usage.json` e `state.db`) **nunca são somado
   um arquivo criado durante a execução e apagado depois aparece como não
   verificável, e um arquivo que existe agora mas foi escrito depois é aceito.
 - A indisponibilidade de uma fonte pode deixar evidências não verificáveis **sem**
-  significar que a execução não ocorreu: com `--no-artifact-check` ou sem
-  repositório para confirmar um commit, a invocação continua relatada como
-  `invoked`, com o motivo correspondente.
+  significar que a execução não ocorreu. Sem repositório, não é possível verificar
+  commits por esse mecanismo; mas um arquivo verificável sob uma base permitida,
+  como o `cwd` da sessão, ainda sustenta `execution_proven`. A chamada permanece
+  `invoked` quando não há outro artefato correlacionado verificável, com o motivo
+  correspondente.
 
 A separação dessas afirmações (invocação, existência, modificação e proveniência
 causal) está proposta em [`docs/backlog.md`](../../docs/backlog.md) e

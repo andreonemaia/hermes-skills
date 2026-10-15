@@ -574,7 +574,7 @@ class TestSourceFailures(SerCase):
     # passa pelo mesmo `redact` do relatório, senão o stderr vira via de vazamento.
     def test_missing_source_message_redacts_the_session_reference(self):
         self.box.database(sessions=[session("20260101_000000_aaaaaa")])
-        ref = "20261012_080613_51acc2"
+        ref = "20260101_000000_cccccc"  # sintético, formato de id real
         code, out, err = self.run_cli(("--json", "--session", ref))
         self.assertEqual(code, 3)
         self.assertEqual(out, "")

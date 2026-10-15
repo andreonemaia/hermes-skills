@@ -148,8 +148,11 @@ reported, at the strongest state the remaining evidence supports.
   limitation, so `execution_proven` disappears even for a run that did produce
   artifacts. The invocation itself is still observed, and the report says so
   instead of looking like a full run.
-- No repository found: commit candidates cannot be confirmed, so a script that
-  committed stays `invoked` with the limitation `no_correlated_artifact`.
+- No repository found: commit candidates cannot be confirmed by that mechanism,
+  but a file artifact under an allowed base (the session `cwd`, for instance) is
+  still verifiable and can sustain `execution_proven`. A script stays `invoked`
+  with the limitation `no_correlated_artifact` only when no other correlated
+  artifact is verifiable.
 - Missing `.usage.json`: the usage source is dropped and the aggregate findings
   disappear; session evidence is unaffected.
 
