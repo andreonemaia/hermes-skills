@@ -98,15 +98,64 @@ filled in from prose.
 
 ## Artifact verification
 
-- File artifacts: paths found in tool output must **exist on disk right now** and
-  resolve inside an allowed base (the session `cwd`, the repository root, or the
-  `--repo` path). Anything else stays unverified.
-- Commit artifacts: candidate SHAs from tool output are only accepted when
-  `git cat-file`/`rev-parse` confirms the commit exists in the repo. No repo, no
-  commit verification.
-- `verification.state` is `verified` with `basis` `artifact_file` or
-  `artifact_commit`, otherwise `unverifiable` with a reason. A path that cannot
-  be pointed at is never reported as a produced artifact.
+An artifact is what separates `execution_proven` from `invoked`, so the rules are
+spelled out precisely. Everything below is a statement about **evidence at report
+time**, never about what the run did.
+
+How a candidate is found and accepted:
+
+- **File artifacts.** Paths are matched in the tool output text of that same call
+  and accepted only when the path resolves inside an allowed base (the session
+  `cwd`, the repository root, or the `--repo` path) **and exists as a file right
+  now**. A missing path, a directory, or a path outside the bases stays
+  unverified. Only the first accepted path is quoted in `verification.detail`.
+- **Commit artifacts.** Hex tokens sitting near a commit-ish word in the same
+  output are accepted only when `git cat-file`/`rev-parse` confirms the commit
+  exists in the local repository. No repo found, no commit verification.
+- **Correlation is per event.** The artifact must come from the output of a
+  `skill_script` event whose `ok is True`. An artifact seen in another call never
+  proves this skill ran.
+
+`verification.state` is `verified` with `basis` `artifact_file` or
+`artifact_commit`, otherwise `unverifiable` with a reason. A path that cannot be
+pointed at is never reported as a produced artifact.
+
+### What the evidence does not prove
+
+- `artifact_file` proves **existence only**: a file the invocation referenced was
+  on disk when the report ran. It does **not** prove that the invocation created,
+  modified or authored it. A successful script that merely printed or read an
+  existing path yields the same signal as one that wrote it, so the report never
+  claims authorship.
+- `execution_proven` means "an observed successful invocation **and** an artifact
+  correlated to that invocation and verified". It is not a claim about creation,
+  modification or authorship of the artifact, and it says nothing about the
+  content being what the skill was supposed to produce.
+- Verification is a **point-in-time stat**, not a check at execution time. A file
+  created during the run and removed afterwards is unverifiable; a file that
+  exists now but was written later is accepted.
+
+Separating those claims is proposed in `docs/backlog.md` and deliberately not
+implemented in v0.1.
+
+## Missing sources are not missing executions
+
+An unavailable source degrades the evidence, never the history: the run is still
+reported, at the strongest state the remaining evidence supports.
+
+- `--no-artifact-check` makes every artifact `unverifiable` (`detail`
+  `verificação de artefatos desativada`) and adds the `artifact_check_disabled`
+  limitation, so `execution_proven` disappears even for a run that did produce
+  artifacts. The invocation itself is still observed, and the report says so
+  instead of looking like a full run.
+- No repository found: commit candidates cannot be confirmed, so a script that
+  committed stays `invoked` with the limitation `no_correlated_artifact`.
+- Missing `.usage.json`: the usage source is dropped and the aggregate findings
+  disappear; session evidence is unaffected.
+
+In every case the report keeps the invocation and records the reason. A gap in
+the evidence is never read as a fact about the run: absence of a verified
+artifact is never presented as absence of execution.
 
 ## Two sources, never one sum
 

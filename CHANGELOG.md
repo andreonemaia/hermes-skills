@@ -25,6 +25,14 @@ skill é o campo `version` do seu próprio `SKILL.md`.
   sua documentação, e o `docs/testing.md` descreve como testar essa consistência.
 - Nenhum script de produção ou comportamento de skill foi alterado por esta
   mudança.
+- `skill-execution-report` (0.1.0): documentação da força das evidências
+  explicitada, sem mudança de comportamento nem de esquema. O `README.md`, o
+  `SKILL.md` e o `references/evidence-rules.md` passam a declarar que
+  `artifact_file` comprova apenas a existência do arquivo referenciado no momento
+  da verificação, que `execution_proven` não comprova criação, modificação nem
+  autoria do artefato, e que a indisponibilidade de uma fonte pode tornar
+  evidências não verificáveis sem significar que a execução não ocorreu. Esquema,
+  nomes de classificação e saída permanecem idênticos.
 
 ### Fixed
 
@@ -87,6 +95,15 @@ skill é o campo `version` do seu próprio `SKILL.md`.
   contra o `/object_info` de um servidor em execução. Somente biblioteca padrão;
   acompanha uma suíte `unittest`. Complementa a skill oficial `comfyui`. Testada
   no Windows.
+- `skill-execution-report` (0.1.0): teste de regressão
+  `tests/test_scope_isolation.py`, comparando `include_children=false` e
+  `include_children=true` sobre as mesmas entradas (fixtures determinísticas),
+  com um par A×B com Git disponível e outro sem Git, verificando que apenas
+  `include_children` varia entre as corridas e que eventos de sessões filhas não
+  aparecem no escopo `main`. Suíte: 146 testes.
+- `docs/backlog.md`: backlog do repositório com a proposta (não implementada) de
+  separar invocação comprovada, existência verificada, modificação observada e
+  proveniência causal da modificação em `skill-execution-report`.
 
 ## [1.0.0] - 2026-10-05
 

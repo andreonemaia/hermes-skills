@@ -18,6 +18,28 @@ Além disso, o relatório nunca inventa o que não pode ver: custo, duração e
 resultado aparecem como **desconhecidos** quando as fontes não os trazem, e
 contadores de fontes diferentes (`.usage.json` e `state.db`) **nunca são somados**.
 
+## O que a evidência prova, e o que não prova
+
+- `artifact_file` comprova **apenas a existência** de um arquivo referenciado no
+  momento da verificação: o caminho apareceu na saída daquela chamada e o arquivo
+  existia em disco quando o relatório rodou. Não comprova que a execução criou,
+  modificou ou é autora do arquivo. Um script que apenas imprimiu ou leu um
+  caminho existente produz o mesmo sinal de um que o escreveu.
+- `execution_proven` significa "invocação com sucesso observado **mais** um
+  artefato correlacionado a ela e verificado". Não é afirmação sobre criação,
+  modificação ou autoria do artefato, nem sobre o conteúdo dele.
+- A verificação acontece no **momento do relatório**, nunca na hora da execução:
+  um arquivo criado durante a execução e apagado depois aparece como não
+  verificável, e um arquivo que existe agora mas foi escrito depois é aceito.
+- A indisponibilidade de uma fonte pode deixar evidências não verificáveis **sem**
+  significar que a execução não ocorreu: com `--no-artifact-check` ou sem
+  repositório para confirmar um commit, a invocação continua relatada como
+  `invoked`, com o motivo correspondente.
+
+A separação dessas afirmações (invocação, existência, modificação e proveniência
+causal) está proposta em [`docs/backlog.md`](../../docs/backlog.md) e
+deliberadamente não implementada nesta versão.
+
 ## Quando usar
 
 - Auditar uma sessão antes de publicar um transcript ou escrever um post-mortem.
