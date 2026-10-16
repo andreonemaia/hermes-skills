@@ -66,10 +66,14 @@ cd <skills-root>/software-development/skill-execution-report
 python scripts/report.py --help
 python scripts/report.py --session latest
 python scripts/report.py --session latest --json
-python scripts/report.py --session 20261012_080613_51acc2 --include-children --repo C:/path/to/repo
+python scripts/report.py --session 20260101_000000_abc123 --include-children --repo C:/path/to/repo
 python scripts/report.py --session latest --json --out report.json
 python scripts/report.py --session latest --no-usage --no-artifact-check
 ```
+
+Session identifiers in these examples are synthetic (`20260101_000000_abc123`),
+in the same format as real ones; pass the id or unique prefix of the session you
+want to analyse.
 
 | Flag | Effect | Default |
 |---|---|---|
@@ -133,6 +137,25 @@ granted on an intent, a mention or an aggregate counter, and it disappears when
 `--no-artifact-check` is used. `available` is vocabulary rather than a finding:
 v0.1 never emits a per-skill `available` entry.
 
+### What `execution_proven` does and does not claim
+
+It proves that the invocation happened with an observed success, and that an
+artifact was correlated to that same invocation and existed when the report ran.
+It does **not** prove that the invocation created, modified or authored the
+artifact: `artifact_file` is an existence check, so a script that only printed or
+read an existing path looks identical to one that wrote it. Verification is also
+a point-in-time stat, not a check at execution time, and it says nothing about
+the artifact's content.
+
+An unavailable source downgrades the evidence, not the history. Without a
+repository, commits cannot be verified by that mechanism, but a verifiable file
+under an allowed base (the session `cwd`, for instance) still sustains
+`execution_proven`; the invocation stays `invoked` only when no other correlated
+artifact is verifiable, with its reason attached. A missing artifact is never read
+as a run that did not happen. See `references/evidence-rules.md` for the exact
+rules; splitting invocation, existence, modification and causal provenance is
+proposed in `docs/backlog.md` and not implemented in v0.1.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -183,6 +206,14 @@ evidence.
   scope, not the truth of the parent session.
 - **Artifact verification only stats paths under the session `cwd`, the repo root
   or the provided `--repo`.** Paths outside those bases stay unverified.
+- **`artifact_file` proves existence, not creation.** A verified artifact means the
+  referenced file existed at report time, not that this invocation wrote it; the
+  report never claims authorship or modification.
+- **A missing source is not a missing execution.** `--no-artifact-check` or an
+  absent `.usage.json` remove evidence, not history: the run is still reported,
+  with the reason attached. An absent repository only removes commit verification:
+  a verifiable file under an allowed base still sustains `execution_proven`, and
+  the run stays `invoked` only when no other correlated artifact is verifiable.
 - **Only a bounded head of each message and payload is parsed.** A signal past
   that head is simply not seen; when a read is cut the parser marks it
   (`_truncated` on the salvaged payload, `result_truncated` / `truncated` on the
@@ -235,3 +266,6 @@ timestamps.
   `available` findings.
 - Cost and duration are reported as unknown: the sources do not carry per-skill
   cost.
+- Invocation, artifact existence, artifact modification and causal provenance are
+  **not** separated in v0.1: `execution_proven` bundles the first two only. The
+  four-way split is proposed in `docs/backlog.md` and not implemented.
