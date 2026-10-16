@@ -179,11 +179,15 @@ junto:
   ou uma linha `tool` / `tool_call_count` diferente de zero no armazenamento de
   sessões;
 - **ausência observada com cobertura declarada**: todas as linhas foram lidas como
-  JSON, os eventos de moldura (`system`+`init` e o `result` final) estavam
-  presentes e nenhum evento de chamada apareceu;
-- **inconclusivo**: stream ausente, vazio, truncado, ilegível ou sem moldura, ou
-  com um tipo de evento que o verificador desta skill não foi validado para
-  reconhecer. Nunca é reportado como "zero ferramentas usadas".
+  objetos JSON, os eventos de moldura estavam em posição (o `system`+`init` como
+  primeiro evento e um único `result` como último) e nenhum evento de chamada
+  apareceu;
+- **inconclusivo**: stream ausente, vazio, ilegível, não decodificável (UTF-8
+  inválido), truncado (só uma truncagem que quebra a moldura é visível) ou sem
+  moldura (fora de posição), ou com um tipo de evento
+  que o verificador desta skill não foi validado para reconhecer (um valor de
+  `type` que não seja string conta como um desses casos). Nunca é reportado como
+  "zero ferramentas usadas".
 
 O texto final do revisor pode *mencionar* `tool_use` em prosa, então a skill não
 usa `grep` no JSONL cru: ela faz o parse dos eventos e conta por `type`
@@ -250,8 +254,10 @@ informa a ausência em vez de fingir ser independente.
   plugins relevantes e antes de reusar os números em outro perfil: não presuma que
   a lista de plugins será a mesma em outros perfis.
 - **A verificação de chamadas tem cobertura declarada, não é uma prova de
-  impossibilidade.** Stream ausente, vazio, truncado, ilegível ou sem moldura
-  resulta em **inconclusivo**, não em "zero ferramentas usadas". E `git status`
+  impossibilidade.** Stream ausente, vazio, ilegível, não decodificável, truncado
+  (só uma truncagem que quebra a moldura é visível) ou sem moldura (fora de
+  posição) resulta em **inconclusivo**, não em "zero
+  ferramentas usadas". E `git status`
   inalterado comprova apenas o estado observado da árvore de trabalho: não
   comprova ausência de efeitos externos, como uma chamada a um serviço remoto ou
   uma escrita do lado do plugin.

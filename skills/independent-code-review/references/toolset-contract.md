@@ -118,8 +118,10 @@ grep -o '"input": [0-9]*' out.jsonl
 - A count of zero `tool_use` events in a transcript is an observation about that
   run, not a capability statement: the toolsets in effect were still loaded. It is
   also only as good as its coverage (see **Classifying a transcript**): a missing,
-  empty, truncated, unparseable or unframed transcript is *inconclusive*, never
-  "zero tools used".
+  empty, unreadable, undecodable, truncated, unparseable or unframed transcript is
+  *inconclusive*, never "zero tools used". Truncation is only visible when it
+  breaks the framing: a record cut in the middle with its framing intact cannot be
+  told apart from a clean run by this parser.
 - An unchanged `git status` covers the observed working-tree state only. It says
   nothing about external effects, such as a call to a remote service or a write
   performed on the plugin side.
@@ -143,15 +145,23 @@ Three outcomes, never two:
 | Outcome | What it takes |
 | --- | --- |
 | **calls detected** | at least one `tool_use` / `tool_result` event, or a `tool` row / non-zero `tool_call_count` in the session store |
-| **absence observed with declared coverage** | every line parsed as JSON, the framing events (`system` + `init`, and the final `result`) were present, and no call event appeared |
-| **inconclusive** | the record is missing, empty, truncated, unparseable, unframed, or carries an event type the parser was not validated against |
+| **absence observed with declared coverage** | every line parsed as a JSON object, the framing events were in position (`system` + `init` as the first event, exactly one `result` as the last), and no call event appeared |
+| **inconclusive** | the record is missing, empty, unreadable, undecodable (not valid UTF-8), truncated (only a truncation that breaks the framing is visible to this parser: a record cut in the middle with the framing intact looks like a clean run), unparseable, unframed, or carries an event type the parser was not validated against (a `type` value that is not a string counts as one of those) |
 
-Precedence when several conditions apply at once: a missing, empty or unparseable
-record is *inconclusive* first; then a detected call wins over an unvalidated event
+Precedence when several conditions apply at once: a missing, empty, unreadable,
+undecodable or unparseable record is *inconclusive* first; then a detected call
+wins over an unvalidated event
 type (a visible `tool_use` is decisive even if another event type is unknown);
 then an unvalidated event type is *inconclusive*; only then does framing decide
-between absence observed and *inconclusive*. A JSON object with no `type` key is
-reported as `<missing type>`, not treated as a crash.
+between absence observed and *inconclusive*. Framing is positional, not just
+present: the transcript must open with `system`/`init` and close with exactly one
+`result`. The detail message separates the cases (framing events missing, out of
+order, or incomplete/duplicated); the verdict is *inconclusive* in all of them.
+Neither a JSON object with no `type` key nor a `type` value of another
+JSON type is a crash: the first is reported as `<missing type>` and the second as
+`<non-string type: T>` (for example `<non-string type: int>`), and either one, not
+being a validated event type, makes the record *inconclusive* unless a call was
+detected first.
 
 Two records can show calls on this build:
 
@@ -191,7 +201,19 @@ against the fixtures listed below:
 ```python
 import json
 
-KNOWN = {"system", "text", "tool_use", "tool_result", "result"}  # event types measured on this build
+# Event types measured on this build. This is the vocabulary the parser was
+# validated against, not the format's complete vocabulary: another build can emit
+# a type listed here as unknown, which is *inconclusive* by design.
+KNOWN = {"system", "text", "tool_use", "tool_result", "result"}
+
+
+def _label(value):
+    """Event-type label that never hashes an arbitrary value (so it cannot raise)."""
+    if value is None:
+        return "<missing type>"
+    if isinstance(value, str):
+        return value
+    return f"<non-string type: {type(value).__name__}>"
 
 
 def classify(path):
@@ -201,40 +223,62 @@ def classify(path):
             raw = fh.read()
     except OSError as exc:
         return "inconclusive", f"unreadable: {exc}"
+    except UnicodeDecodeError as exc:
+        return "inconclusive", f"undecodable: {exc}"
     lines = [ln for ln in raw.splitlines() if ln.strip()]
     if not lines:
         return "inconclusive", "empty transcript"
-    events, bad = [], 0
+    events, bad, non_object = [], 0, 0
     for ln in lines:
         try:
             obj = json.loads(ln)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
+            # RecursionError: a line nested deeply enough makes the decoder give up.
             bad += 1
             continue
         if isinstance(obj, dict):
             events.append(obj)
         else:
-            bad += 1
-    if bad:
-        return "inconclusive", f"{bad} unparseable line(s) of {len(lines)}"
-    types = [e.get("type") for e in events]
-    uses, results = types.count("tool_use"), types.count("tool_result")
+            # Valid JSON, but not an object, so not an event either.
+            non_object += 1
+    if bad or non_object:
+        parts = []
+        if bad:
+            parts.append(f"{bad} unparseable line(s)")
+        if non_object:
+            parts.append(f"{non_object} non-object line(s)")
+        return "inconclusive", f"{', '.join(parts)} of {len(lines)}"
+    labels = [_label(e.get("type")) for e in events]
+    uses, results = labels.count("tool_use"), labels.count("tool_result")
     if uses or results:
         return "calls detected", f"{uses} tool_use / {results} tool_result"
-    unknown = sorted(
-        {"<missing type>" if t is None else str(t) for t in types if t not in KNOWN}
-    )
+    unknown = sorted({t for t in labels if t not in KNOWN})
     if unknown:
         return "inconclusive", f"event type(s) not validated against this build: {unknown}"
-    framed = "system" in types and "result" in types and any(
-        e.get("subtype") == "init" for e in events if e.get("type") == "system"
+    framed = (
+        events[0].get("type") == "system"
+        and events[0].get("subtype") == "init"
+        and events[-1].get("type") == "result"
+        and labels.count("result") == 1
     )
-    if not framed:
-        return "inconclusive", "framing events missing (need system/init and result)"
-    return "absence observed with declared coverage", f"{len(events)} events, framed, 0 call events"
+    if framed:
+        return "absence observed with declared coverage", f"{len(events)} events, framed, 0 call events"
+    # The verdict is the same for every unframed record; the detail separates a
+    # framing that is absent from one that is present but misplaced or duplicated.
+    opens = any(e.get("type") == "system" and e.get("subtype") == "init" for e in events)
+    n_results = labels.count("result")
+    if not opens or not n_results:
+        return "inconclusive", "framing events missing (need system/init first and result last)"
+    if n_results == 1:
+        return "inconclusive", (
+            "framing out of order (need system/init first and the single result last)"
+        )
+    return "inconclusive", (
+        "framing incomplete or duplicated (need system/init first and exactly one result last)"
+    )
 ```
 
-Fixtures it was validated with (synthetic, in a scratch directory):
+Fixtures it was validated with (synthetic, in a scratch directory, 19 of them):
 
 | Fixture | Expected verdict |
 | --- | --- |
@@ -244,15 +288,32 @@ Fixtures it was validated with (synthetic, in a scratch directory):
 | review prose that only *mentions* `tool_use`, inside the `result` text | absence observed with declared coverage |
 | truncated: valid lines, no `result` event | inconclusive |
 | invalid: unparseable lines | inconclusive |
+| line that is valid JSON but not an object (`[1, 2]`) | inconclusive |
+| line nested deeply enough that the JSON decoder gives up (a balanced array nested 200,000 deep raises `RecursionError`) | inconclusive |
 | empty file | inconclusive |
 | unknown event type | inconclusive |
 | dict line with no `type` key, next to an unknown event type | inconclusive |
+| `type` value that is a list (`["x"]`) | inconclusive |
+| `type` value that is an object (`{"a": 1}`) | inconclusive |
+| `type` value that is a number (`5`) | inconclusive |
+| bytes that are not valid UTF-8 | inconclusive |
+| framing out of order: `result` first, `system`+`init` last | inconclusive |
+| duplicated framing: a second `result` event | inconclusive |
+| lone `result` with no `system`/`init` anywhere | inconclusive |
 | missing path | inconclusive |
 
 Applied to the real artifacts of this measurement: the reviewer transcript
 (`review.jsonl`, 1,618 events, `system`/`init` + `result` framing) classified as
 absence observed with declared coverage, and a probe transcript that called
 `tool_search` twice (`probes/matrix/T_empty.jsonl`) classified as calls detected.
+All four transcripts measured on this build (`review.jsonl` of two review rounds,
+`probes/matrix/T_empty.jsonl`, `probes/matrix/T_default.jsonl`) open with
+`system`/`init` and close with exactly one `result`, which is what the positional
+framing check requires; the positional check is therefore consistent with every
+run measured here, and only reordering, duplication or a missing opener makes it
+fire. The parameter is a transcript path: a non-path argument (for example `None`)
+is a caller error, outside the validated domain, and is not part of the coverage
+claimed above.
 
 ## Conservative procedure
 
@@ -262,8 +323,8 @@ absence observed with declared coverage, and a probe transcript that called
    cannot call tools.
 3. After the run, classify the transcript with the verifier above (or an
    equivalent parser) and record the verdict **and** its coverage. A transcript
-   that is missing, empty, truncated, unparseable or unframed is inconclusive:
-   report it that way instead of "zero tools used".
+   that is missing, empty, unreadable, undecodable, truncated, unparseable or
+   unframed is inconclusive: report it that way instead of "zero tools used".
 4. Cross-check the session store (`tool_call_count`, `tool` rows) for the same run
    when it matters.
 5. Record which toolsets were in effect (rerun the probe above) and report them;
