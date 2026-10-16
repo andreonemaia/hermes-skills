@@ -21,8 +21,8 @@ skill covers GitHub PRs, local branch diffs, staged changes, and uncommitted
 changes. It never publishes to GitHub and never edits code on its own.
 
 **Core principle:** an agent must not review its own work in its own context. A
-fresh process, a separate model, and zero tools find what the implementer's
-context hides.
+fresh process, a separate model and a brief that forbids every tool find what the
+implementer's context hides.
 
 ## When to Use
 
@@ -60,12 +60,14 @@ git diff --cached              # staged
 git diff                       # unstaged
 git diff <A>..<B>              # explicit range
 
-# 3. Run the isolated reviewer (one-shot, no toolsets: -t none, never -t "")
+# 3. Run the isolated reviewer (one-shot; no tested flag combination leaves zero
+#    toolsets on this build, so -t "" (smallest usable surface measured) plus the
+#    brief's prohibition is the barrier)
 #    pass --reasoning only if auxiliary.review.reasoning_effort is configured
 mkdir -p "<scratch-dir>"
 hermes chat --query-file <brief.md> \
   -m <model> --provider <provider> --reasoning <level> \
-  -t none --ignore-rules -Q --max-turns 2 \
+  -t "" --ignore-rules -Q --max-turns 2 \
   --in <scratch-dir> --format stream-json --source oneshot \
   > "<scratch-dir>/review.jsonl"
 ```
@@ -170,28 +172,59 @@ the truncation instead of reviewing a partial diff silently.
 mkdir -p "<scratch-dir>"
 hermes chat --query-file <brief> \
   -m <model> --provider <provider> --reasoning <level> \
-  -t none --ignore-rules -Q --max-turns 2 \
+  -t "" --ignore-rules -Q --max-turns 2 \
   --in <scratch-dir> --format stream-json --source oneshot \
   > "<scratch-dir>/review.jsonl"
 ```
 
-- `<model>` and `<provider>` come from Step 1. Provider identifiers (`custom`,
-  `openai`, `anthropic`, ...) and full display names are both accepted.
+- **Toolset contract (measured, this build).** No tested flag combination leaves
+  the reviewer with zero toolsets. `-t none` is refused at launch
+  (`invalid_params`, exit 1) before any model response (0 tokens). `-t ""` is accepted and
+  resolves to the **plugin toolsets only** (`OpenPencil`, `web-search-plus`), the
+  smallest usable surface among the options measured and a smaller one than the
+  default (16 platform toolsets plus those two); omitting `-t` loads the default.
+  `--safe-mode` subtracts only the `web-search-plus` plugin toolset (`OpenPencil`
+  survives it, and `-t "" --safe-mode` still resolves to `OpenPencil` alone) and it
+  failed in every probe about two seconds in, after `init` and before any model
+  response (0 tokens, generic lost-turn text), so it is not a usable zero-tool mode
+  here and its cause was not isolated. `--source oneshot` resolves identically to
+  the default CLI source for every pick, and one run of the full reviewer command
+  line above measured 5,466 input tokens with 0 `tool_use` events by structured
+  count (absence observed with declared coverage, see
+  `references/toolset-contract.md`; a different model and prompt from the `-t ""`
+  probe, so it is not a controlled comparison). These numbers hold for this build,
+  this configuration,
+  this plugin set and this launch path; re-measure when any of them changes, and do
+  not assume another profile loads the same plugins. Details, reproduction commands
+  and the scope of the measurement: `references/toolset-contract.md`.
+- The read-only barrier is therefore **the brief's prohibition plus the post-run
+  checks**, not a missing tool. The brief states the requirement (no editing, no
+  execution, no publishing, review text only); the checks look at the run after the
+  fact. Be precise about what each half does: the prohibition is a requirement on
+  the reviewer, not a guarantee about the process, and the checks detect within
+  their declared coverage, after the fact. Neither one prevents a call, neither
+  proves absence of external effects, and neither turns the process into a tool-free
+  one. Report the toolsets that were actually in effect instead of claiming a
+  tool-free process.
+- `<model>` and `<provider>` come from Step 1. Use the provider's real name as it
+  appears under `providers:` in `config.yaml`; the literal `custom` is refused at
+  launch (`provider 'custom' resolved without credentials ... use its real name`)
+  unless the profile actually defines a provider with that name.
 - `--reasoning <level>` comes from `auxiliary.review.reasoning_effort` when that
   key is present. If it is absent, omit `--reasoning` entirely and let the CLI
   default apply; never invent a level.
-- `-t none` yields **zero tools** (verified with `-v`: "No tools loaded"). Do
-  NOT use `-t ""`: an empty value falls back to the default toolsets and the
-  reviewer runs with full tools. `-t none` prints a cosmetic
-  `Warning: Unknown toolsets: none`; that warning is expected. Version-dependent:
-  re-validate on a CLI change.
+- The old `-t none` / "zero tools" claim is gone on purpose: it was contradicted,
+  not flaky. `-t none` is refused at launch on this build (deterministic
+  `invalid_params`, exit 1) before any model response (0 tokens). `-t ""` resolves to the
+  plugin toolsets only, and that is the smallest usable surface a reviewer run can
+  be given here.
 - `--ignore-rules` skips injection of memory, `AGENTS.md`/`SOUL.md` and preloaded
   skills, so the reviewer sees only the brief.
 - `--in <scratch-dir>` scopes the reviewer's working directory. This is **defense
-  in depth**, not a sandbox: the real write barrier is `-t none`, which leaves the
-  process with no tool able to write anywhere.
-- `--max-turns 2` keeps the run finite even if tools were ever re-enabled; with
-  zero tools it is inert.
+  in depth**, not a sandbox: a separate directory is not isolation by itself, and
+  it is not the write barrier either. The barrier is the brief's prohibition plus
+  the post-run checks in Step 4.
+- `--max-turns 2` keeps the run finite; it is a bound, not a capability limit.
 - `-Q` (or `--oneshot`) makes the run finite and non-interactive; combined with
   `--source oneshot` it is tagged as an internal auxiliary run, hidden from the
   Desktop/TUI/dashboard pickers (see **Auxiliary runs are internal
@@ -203,7 +236,7 @@ hermes chat --query-file <brief> \
   current directory, usually the repository under review.
 - Pass the diff inside the brief; never share the implementer's conversation.
 
-### Step 4 - Confirm the model that actually ran
+### Step 4 - Confirm the model that actually ran, and classify the call record
 
 Parse the stream for the init event:
 `{"type":"system","subtype":"init","model":"<actual>"}`.
@@ -216,20 +249,70 @@ Parse the stream for the init event:
 - `<actual>` == your own model -> process/context isolation still holds, but
   report `distinct from implementer model: no` (Step 1.5). Never present a
   same-model run as model-independent.
-- Sanity check: `grep -cE '"type": ?"tool_use"' "<scratch-dir>/review.jsonl"` must
-  be `0`. The pattern requires an unescaped `"type"` key, so the brief echoed
-  back into the stream, where the same text appears as `\"type\"`, cannot cause a
-  false positive. Note that `grep -c` exits `1` when the count is `0`, which is
-  the expected result here; read the number, not the exit status (use `|| true`
-  in scripts under `set -e`).
+
+**Tool-call record.** Two records can show calls on this build:
+
+1. the `--format stream-json` transcript of this run (`review.jsonl`): a call is a
+   top-level `{"type":"tool_use","name":...}` event followed by a
+   `{"type":"tool_result","name":...}`. `--format text` prints only the final
+   response and cannot show calls.
+2. the session store, after the run: `sessions.tool_call_count` and the
+   per-message `role='tool'` rows
+   (`hermes sessions export --session-id <id> --format jsonl <out.jsonl>`; the
+   selector is `--session-id` and the positional argument is the *output* path).
+   In the export, `tool_names` is the schema payload of the tools *available* to
+   the run; in `state.db` the same column is an opaque identifier of that tool set.
+   Neither is evidence of a call.
+
+Classify into one of three outcomes and record the coverage alongside it:
+
+- **calls detected** - at least one `tool_use`/`tool_result` event, or a `tool`
+  row / non-zero `tool_call_count` in the store.
+- **absence observed with declared coverage** - every line parsed as a JSON
+  object, the framing events were in position (`system`+`init` first, exactly one
+  `result` last), and no call event appeared. State the record, the event count
+  and that coverage.
+- **inconclusive** - the transcript is missing, empty, unreadable, undecodable,
+  truncated (only a truncation that breaks the framing is visible to this parser),
+  unparseable (a line that is valid JSON but not an object counts here), reached
+  through a path the OS rejects as malformed, or unframed, or carries an event type
+  this skill's parser
+  was not validated against (a `type` value that is not a string counts as one of
+  those). Never report an inconclusive record as "zero tools used".
+
+Do not grep the raw transcript for a keyword. The final `result` event carries the
+review text, and that text can mention `tool_use` in prose: in the run measured for
+`references/toolset-contract.md`, `grep -c tool_use review.jsonl` returned `1` while
+the structured count of `tool_use` events was `0` (the hit was prose inside the
+`result` text). Parse the JSONL and count events by `type`; the reference ships a
+~87-line verifier plus the 24 fixtures it was validated against (clean run,
+tool-calling run, prose that only mentions a call, truncated, invalid, a valid
+JSON line that is not an object, a line nested deeply enough that the decoder
+gives up, an integer literal past the decoder's conversion limit, empty, unknown
+event type, a call next to an unknown event type, a dict
+line with no `type` key next to an unknown event type, a `type` value that is a
+list, an object or a number, bytes that are not valid UTF-8, framing out of
+order, duplicated framing, a duplicated `system`+`init` opener mid-stream, a lone
+`result` with no opener, missing file, a path
+the OS rejects as malformed, a raw U+2028 inside a JSON string, a byte-order mark
+before a clean transcript).
 
 ### Step 5 - Read-only enforcement
 
 The reviewer is strictly read-only: no editing, creating, moving or deleting
 files; no commit, push or merge; no branch or remote changes; no published
-comments; no dependency installs. Supply any extra context yourself in the
-brief. After the run, confirm nothing changed (`git status --short` still
-matches) and that no write operation ran.
+comments; no dependency installs. That is a requirement stated in the brief and
+checked after the run, not a consequence of the reviewer lacking tools (no tested
+flag combination leaves zero toolsets on this build; see
+`references/toolset-contract.md`). Supply any extra context yourself in the brief.
+
+After the run:
+
+- classify the call record (Step 4) and report the verdict with its coverage;
+- confirm `git status --short` still matches what it was before the review, and
+  report it as the observed working-tree state only. It is not evidence about
+  external effects: a call to a remote service, or a write performed on the plugin
+  side, leaves the working tree untouched.
 
 ### Step 6 - Reviewer briefing
 
@@ -326,15 +409,34 @@ approved | approved with observations | changes recommended | changes required b
 ### Safety
 - no file was modified: yes/no
 - no Git/GitHub write operation was performed: yes/no
+- tool-call record: <calls detected | absence observed with declared coverage | inconclusive> (<coverage>)
+- working tree: <unchanged | changed: ...> (observed state only; says nothing about external effects)
 ```
 
 ## Pitfalls
 
 - **Faking independence**: running the main agent (same session/model) and
   calling it a reviewer. Never do this; if no reviewer is configured, say so.
-- **`-t ""` does not disable tools** - it silently re-enables the default
-  toolsets. Use `-t none`, which really loads zero tools. Confirm with `-v`
-  ("No tools loaded") or with zero `tool_use` events in the stream.
+- **No tested flag combination leaves zero toolsets on this build.** `-t none` is
+  refused at launch (`invalid_params`, exit 1) before any model response (0 tokens), and
+  `--safe-mode` failed before any model response (0 tokens); `-t ""` is accepted
+  and resolves to the plugin toolsets only, the smallest usable surface among the
+  options measured. Never claim "zero tools": use `-t ""`, keep the brief's
+  prohibition explicit, and classify the run's call record. See
+  `references/toolset-contract.md`.
+- **A zero `tool_use` count is only as good as its coverage.** Three outcomes, not
+  two: *calls detected*, *absence observed with declared coverage*, *inconclusive*.
+  A missing, empty, unreadable, undecodable, truncated (only a truncation that
+  breaks the framing is visible), unparseable (a line that is valid JSON but not an
+  object counts here), malformed-path or unframed
+  transcript is inconclusive and must never be reported as "zero tools used". Do
+  not grep the raw JSONL: the
+  review text in the final `result` event can mention `tool_use` in prose (a
+  measured run made `grep -c tool_use` return `1` with a structured count of `0`).
+  Parse the events and count by `type`.
+- **`git status` unchanged proves only the observed working-tree state.** It says
+  nothing about external effects, such as a remote API call or a plugin-side write.
+  Report it as what it is.
 - **Provider is not in the stream.** Only the model appears in the init event;
   report the provider from config, not from the stream.
 - **`hermes config get` warns on unknown dotted keys.** Read the printed value;
@@ -353,9 +455,14 @@ approved | approved with observations | changes recommended | changes required b
   command blocks are POSIX-shell syntax (bash / git-bash). PowerShell is not
   drop-in compatible; translate line continuations, `grep`/`wc` and redirection
   before using a block there, or run it through git-bash.
-- **Treating version-validated behaviour as a guarantee.** The `-t none` and
-  `--source oneshot` findings were validated on one Hermes version. Re-validate
-  after a CLI upgrade instead of assuming.
+- **Treating version-validated behaviour as a guarantee.** The toolset
+  resolution (see `references/toolset-contract.md`) and the `--source oneshot`
+  findings were validated on one Hermes version, one provider, one model, one
+  configuration with its plugin set, and the CLI launch path. Re-validate after a
+  CLI upgrade, after a change to `config.yaml` or to the relevant plugins, and
+  before reusing the numbers in another profile (the plugin list is not assumed to
+  be the same there). Re-validate the stream parser too when the build's event
+  types change.
 - **Claiming untested platforms.** This skill is Windows-tested; do not extend
   `platforms` without actually running it elsewhere.
 
@@ -364,9 +471,9 @@ approved | approved with observations | changes recommended | changes required b
 - [ ] Reviewer provider/model read from `auxiliary.review` (or absence reported).
 - [ ] Diff acquired read-only; source stated.
 - [ ] Reviewer ran in a separate `hermes chat` process with explicit provider/model.
-- [ ] `-t none` used; tool-use count in the stream is `0`.
+- [ ] `-t ""` used (smallest usable surface measured); the call record was classified as *calls detected*, *absence observed with declared coverage* or *inconclusive*, with the coverage stated; the toolsets actually in effect were recorded and reported.
 - [ ] Auxiliary run was one-shot (`-Q`/`--oneshot`) with `--source oneshot`; no interactive auxiliary session and no session deleted.
 - [ ] Init event model matches the configured model; fallback checked and reported.
 - [ ] Report states whether the reviewer model differs from the implementer's.
-- [ ] No file/Git/GitHub write occurred; `git status` unchanged after the review.
+- [ ] No file/Git/GitHub write occurred; `git status` unchanged after the review (observed working-tree state only, not evidence about external effects).
 - [ ] Findings validated and classified; report emitted in the user's language.
