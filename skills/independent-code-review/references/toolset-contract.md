@@ -118,7 +118,8 @@ grep -o '"input": [0-9]*' out.jsonl
 - A count of zero `tool_use` events in a transcript is an observation about that
   run, not a capability statement: the toolsets in effect were still loaded. It is
   also only as good as its coverage (see **Classifying a transcript**): a missing,
-  empty, unreadable, undecodable, truncated, unparseable or unframed transcript is
+  empty, unreadable, undecodable, truncated, unparseable (a non-object line
+  included) or unframed transcript is
   *inconclusive*, never "zero tools used". Truncation is only visible when it
   breaks the framing: a record cut in the middle with its framing intact cannot be
   told apart from a clean run by this parser.
@@ -146,16 +147,19 @@ Three outcomes, never two:
 | --- | --- |
 | **calls detected** | at least one `tool_use` / `tool_result` event, or a `tool` row / non-zero `tool_call_count` in the session store |
 | **absence observed with declared coverage** | every line parsed as a JSON object, the framing events were in position (`system` + `init` as the first event, exactly one `result` as the last), and no call event appeared |
-| **inconclusive** | the record is missing, empty, unreadable, undecodable (not valid UTF-8), truncated (only a truncation that breaks the framing is visible to this parser: a record cut in the middle with the framing intact looks like a clean run), unparseable, unframed, or carries an event type the parser was not validated against (a `type` value that is not a string counts as one of those) |
+| **inconclusive** | the record is missing, empty, unreadable, undecodable (not valid UTF-8), truncated (only a truncation that breaks the framing is visible to this parser: a record cut in the middle with the framing intact looks like a clean run), unparseable (a line that is valid JSON but not an object counts here, as does a line whose integer literal exceeds the decoder's conversion limit), addressed by a path the OS rejects as malformed (an embedded NUL), unframed, or carries an event type the parser was not validated against (a `type` value that is not a string counts as one of those) |
 
 Precedence when several conditions apply at once: a missing, empty, unreadable,
-undecodable or unparseable record is *inconclusive* first; then a detected call
+undecodable, malformed-path or unparseable record (a non-object line included) is
+*inconclusive* first; then a detected call
 wins over an unvalidated event
 type (a visible `tool_use` is decisive even if another event type is unknown);
 then an unvalidated event type is *inconclusive*; only then does framing decide
 between absence observed and *inconclusive*. Framing is positional, not just
 present: the transcript must open with `system`/`init` and close with exactly one
-`result`. The detail message separates the cases (framing events missing, out of
+`result`; a second `system`/`init` later in the stream does not by itself break
+the frame, because only the opener's position and the count of `result` events
+are checked. The detail message separates the cases (framing events missing, out of
 order, or incomplete/duplicated); the verdict is *inconclusive* in all of them.
 Neither a JSON object with no `type` key nor a `type` value of another
 JSON type is a crash: the first is reported as `<missing type>` and the second as
@@ -219,21 +223,31 @@ def _label(value):
 def classify(path):
     """Return (verdict, detail) for one --format stream-json transcript."""
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8-sig") as fh:
             raw = fh.read()
     except OSError as exc:
         return "inconclusive", f"unreadable: {exc}"
     except UnicodeDecodeError as exc:
         return "inconclusive", f"undecodable: {exc}"
-    lines = [ln for ln in raw.splitlines() if ln.strip()]
+    except ValueError as exc:
+        # A str path the OS rejects as malformed (an embedded NUL, for example) is
+        # not an OSError. Must stay after UnicodeDecodeError, which is a ValueError.
+        return "inconclusive", f"invalid path: {exc}"
+    # Split on "\n" only: str.splitlines() also breaks on U+0085, U+2028 and U+2029,
+    # which JSON allows unescaped inside a string; splitting there would shred a
+    # well-formed line. (\v, \f, \x1c-\x1e it also breaks on are decoder-rejected.)
+    lines = [ln for ln in raw.split("\n") if ln.strip()]
     if not lines:
         return "inconclusive", "empty transcript"
     events, bad, non_object = [], 0, 0
     for ln in lines:
         try:
             obj = json.loads(ln)
-        except (json.JSONDecodeError, RecursionError):
-            # RecursionError: a line nested deeply enough makes the decoder give up.
+        except (ValueError, RecursionError):
+            # ValueError covers json.JSONDecodeError and the integer-conversion
+            # limit (sys.set_int_max_str_digits, 4300 digits by default, so a line
+            # with a huge bare integer raises a plain ValueError); RecursionError:
+            # a line nested deeply enough makes the decoder give up.
             bad += 1
             continue
         if isinstance(obj, dict):
@@ -278,7 +292,7 @@ def classify(path):
     )
 ```
 
-Fixtures it was validated with (synthetic, in a scratch directory, 19 of them):
+Fixtures it was validated with (synthetic, in a scratch directory, 24 of them):
 
 | Fixture | Expected verdict |
 | --- | --- |
@@ -299,8 +313,13 @@ Fixtures it was validated with (synthetic, in a scratch directory, 19 of them):
 | bytes that are not valid UTF-8 | inconclusive |
 | framing out of order: `result` first, `system`+`init` last | inconclusive |
 | duplicated framing: a second `result` event | inconclusive |
+| duplicated `system`+`init` opener mid-stream, framing otherwise intact (the opener's position and the `result` count are the only framing checks) | absence observed with declared coverage |
 | lone `result` with no `system`/`init` anywhere | inconclusive |
 | missing path | inconclusive |
+| path the OS rejects as malformed (a `str` with an embedded NUL byte) | inconclusive |
+| integer literal past the decoder's conversion limit (a bare 5,000-digit integer) | inconclusive |
+| raw U+2028 inside a JSON string value, framing intact | absence observed with declared coverage |
+| byte-order mark before an otherwise clean transcript | absence observed with declared coverage |
 
 Applied to the real artifacts of this measurement: the reviewer transcript
 (`review.jsonl`, 1,618 events, `system`/`init` + `result` framing) classified as
@@ -311,9 +330,11 @@ All four transcripts measured on this build (`review.jsonl` of two review rounds
 `system`/`init` and close with exactly one `result`, which is what the positional
 framing check requires; the positional check is therefore consistent with every
 run measured here, and only reordering, duplication or a missing opener makes it
-fire. The parameter is a transcript path: a non-path argument (for example `None`)
-is a caller error, outside the validated domain, and is not part of the coverage
-claimed above.
+fire. The parameter is a transcript path: an argument that is not a path (for
+example `None`, or an `int`) is a caller error, outside the validated domain,
+while a `str` path the OS rejects as malformed (an embedded NUL) is inside it and
+is reported as *inconclusive*. A path that is not a transcript at all is likewise
+inconclusive rather than an error, and is not part of the coverage claimed above.
 
 ## Conservative procedure
 

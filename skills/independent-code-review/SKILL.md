@@ -274,7 +274,9 @@ Classify into one of three outcomes and record the coverage alongside it:
   and that coverage.
 - **inconclusive** - the transcript is missing, empty, unreadable, undecodable,
   truncated (only a truncation that breaks the framing is visible to this parser),
-  unparseable or unframed, or carries an event type this skill's parser
+  unparseable (a line that is valid JSON but not an object counts here), reached
+  through a path the OS rejects as malformed, or unframed, or carries an event type
+  this skill's parser
   was not validated against (a `type` value that is not a string counts as one of
   those). Never report an inconclusive record as "zero tools used".
 
@@ -283,13 +285,17 @@ review text, and that text can mention `tool_use` in prose: in the run measured 
 `references/toolset-contract.md`, `grep -c tool_use review.jsonl` returned `1` while
 the structured count of `tool_use` events was `0` (the hit was prose inside the
 `result` text). Parse the JSONL and count events by `type`; the reference ships a
-~77-line verifier plus the 19 fixtures it was validated against (clean run,
+~87-line verifier plus the 24 fixtures it was validated against (clean run,
 tool-calling run, prose that only mentions a call, truncated, invalid, a valid
 JSON line that is not an object, a line nested deeply enough that the decoder
-gives up, empty, unknown event type, a call next to an unknown event type, a dict
+gives up, an integer literal past the decoder's conversion limit, empty, unknown
+event type, a call next to an unknown event type, a dict
 line with no `type` key next to an unknown event type, a `type` value that is a
 list, an object or a number, bytes that are not valid UTF-8, framing out of
-order, duplicated framing, a lone `result` with no opener, missing file).
+order, duplicated framing, a duplicated `system`+`init` opener mid-stream, a lone
+`result` with no opener, missing file, a path
+the OS rejects as malformed, a raw U+2028 inside a JSON string, a byte-order mark
+before a clean transcript).
 
 ### Step 5 - Read-only enforcement
 
@@ -421,7 +427,8 @@ approved | approved with observations | changes recommended | changes required b
 - **A zero `tool_use` count is only as good as its coverage.** Three outcomes, not
   two: *calls detected*, *absence observed with declared coverage*, *inconclusive*.
   A missing, empty, unreadable, undecodable, truncated (only a truncation that
-  breaks the framing is visible), unparseable or unframed
+  breaks the framing is visible), unparseable (a line that is valid JSON but not an
+  object counts here), malformed-path or unframed
   transcript is inconclusive and must never be reported as "zero tools used". Do
   not grep the raw JSONL: the
   review text in the final `result` event can mention `tool_use` in prose (a
