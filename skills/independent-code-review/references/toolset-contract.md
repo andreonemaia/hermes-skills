@@ -14,6 +14,8 @@ hermes chat -Q -q "Responda apenas: ok" -m deepseek-v4.1-flash \
 `provider 'custom' resolved without credentials (no endpoint or API key
 configured). If this is a named custom provider, use its real name`.
 
+The probe command above ran on the default CLI source (no `--source` flag).
+
 Do not generalise these numbers to another build, another provider, another model
 or another launch surface (Desktop/TUI/ACP, `session.create`) without
 re-measuring.
@@ -29,12 +31,12 @@ result per pick (toolset count from the resolver; run outcome from the CLI):
 | omitted | 16 platform toolsets (`browser`, `clarify`, `code_execution`, `computer_use`, `cronjob`, `delegation`, `file`, `image_gen`, `memory`, `session_search`, `skills`, `terminal`, `todo`, `tts`, `vision`, `web`) + plugin toolsets (`OpenPencil`, `web-search-plus`) | exit 0, 17,041 input tokens |
 | `-t ""` | plugin toolsets only: `OpenPencil`, `web-search-plus` | exit 0, 6,139 input tokens |
 | `-t web` | `web` + plugin toolsets | exit 0, 6,603 input tokens |
-| `-t none` | refused: `RuntimeStoreError('invalid_params')` | exit 1, no model call, 0 tokens |
-| `-t <unknown>` | refused: `invalid_params` | exit 1, no model call |
-| `-t web,none` | refused: `invalid_params` | exit 1, no model call |
+| `-t none` | refused: `RuntimeStoreError('invalid_params')` | exit 1, no model response (0 tokens) |
+| `-t <unknown>` | refused: `invalid_params` | exit 1, no model response (0 tokens) |
+| `-t web,none` | refused: `invalid_params` | exit 1, no model response (0 tokens) |
 | `-t desktop_ui` | refused on the CLI path (only `source=gui` may pick it) | exit 1 |
-| `--safe-mode` | 16 platform toolsets + `OpenPencil` (the plugin `web-search-plus` is subtracted) | exit 1, no model call: the run died before the toolset mattered |
-| `-t "" --safe-mode` | `OpenPencil` only | exit 1, no model call |
+| `--safe-mode` | 16 platform toolsets + `OpenPencil` (the plugin `web-search-plus` is subtracted) | exit 1, no model response (0 tokens): the run died before the toolset mattered |
+| `-t "" --safe-mode` | `OpenPencil` only | exit 1, no model response (0 tokens) |
 
 Reading:
 
@@ -46,7 +48,8 @@ Reading:
    the platform toolsets are gone, but the plugin toolsets are folded in
    regardless. `-t ""` therefore loads *fewer* tools than the default, not more.
 3. **No measured flag combination leaves zero toolsets.** The smallest surface a
-   run can be given here is `-t ""` (two plugin toolsets).
+   run can be given here is `-t ""` (two plugin toolsets); adding `--safe-mode`
+   drops it to `OpenPencil` alone, which is still not zero.
 4. `--safe-mode` could not be used at all on this path: every probe exited 1
    about two seconds in, after `init` (session created, model resolved) and
    before any model response, with zero tokens and the generic lost-turn text
@@ -61,7 +64,7 @@ Reading:
 
 ## Reproduction
 
-Deterministic resolution (no model call, no network): call the same function the
+Deterministic resolution (no model response, no network): call the same function the
 gateway calls at launch.
 
 ```python
@@ -77,6 +80,7 @@ for label, params, safe_mode in [
     ("-t none", {"toolsets": ["none"]}, False),
     ("-t web", {"toolsets": ["web"]}, False),
     ("--safe-mode", {}, True),
+    ('-t "" --safe-mode', {"toolsets": []}, True),
 ]:
     try:
         resolved = _resolve_toolsets(dict(params), copy.deepcopy(config), "cli", safe_mode)
@@ -84,6 +88,15 @@ for label, params, safe_mode in [
     except Exception as exc:
         print(label, type(exc).__name__, exc)
 ```
+
+`_resolve_toolsets(params, config, source, safe_mode)` stores an explicit pick
+under `platform_toolsets['cli']` for every `source` except `acp`, so `source=cli`
+and `source=oneshot` resolve identically for every pick above (measured); only the
+omitted pick differs under `source=tui`, which folds in `project`. The probes ran
+on the default CLI source (no `--source` flag); the reviewer command line adds
+`--source oneshot` and `--ignore-rules`, and that full flag set measured 5,466
+input tokens (model `glm-5.3-flash`, prompt a short review brief) with 0
+`tool_use` events.
 
 Empirical run (one API call per case; the input-token count is a proxy for the
 size of the tool surface):

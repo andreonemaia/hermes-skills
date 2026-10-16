@@ -181,15 +181,23 @@ hermes chat --query-file <brief> \
   call). `-t ""` is accepted and resolves to the **plugin toolsets only**
   (`OpenPencil`, `web-search-plus`), a smaller surface than the default (16
   platform toolsets plus those two); omitting `-t` loads the default. `--safe-mode`
-  drops the plugin toolsets but failed in every probe about two seconds in, after
-  `init` and before any model response (zero tokens, generic lost-turn text), so it
-  is not a usable zero-tool mode here and its cause was not isolated. Details,
+  subtracts only the `web-search-plus` plugin toolset (`OpenPencil` survives it,
+  and `-t "" --safe-mode` still resolves to `OpenPencil` alone) and it failed in
+  every probe about two seconds in, after `init` and before any model response
+  (zero tokens, generic lost-turn text), so it is not a usable zero-tool mode here
+  and its cause was not isolated. `--source oneshot` resolves identically to the
+  default CLI source for every pick, and one run of the full reviewer command line
+  above measured 5,466 input tokens with 0 `tool_use` events (a different model and
+  prompt from the `-t ""` probe, so it is not a controlled comparison). Details,
   reproduction commands and the scope of the measurement:
   `references/toolset-contract.md`.
-- The reviewer's read-only guarantee is therefore **the brief plus the stream
+- The reviewer's read-only barrier is therefore **the brief plus the stream
   check**, not a missing tool: the brief forbids every write/execute action, and
-  Step 4 requires zero `tool_use` events in the stream. Report the toolsets that
-  were actually in effect instead of claiming a tool-free process.
+  Step 4 requires zero `tool_use` events in the stream. Be precise about what each
+  half does: the prohibition is a mitigation, and the stream check detects a
+  violation after it happened. Neither one prevents a call, and neither turns the
+  process into a tool-free one. Report the toolsets that were actually in effect
+  instead of claiming a tool-free process.
 - `<model>` and `<provider>` come from Step 1. Use the provider's real name as it
   appears under `providers:` in `config.yaml`; the literal `custom` is refused at
   launch (`provider 'custom' resolved without credentials ... use its real name`)
@@ -197,9 +205,11 @@ hermes chat --query-file <brief> \
 - `--reasoning <level>` comes from `auxiliary.review.reasoning_effort` when that
   key is present. If it is absent, omit `--reasoning` entirely and let the CLI
   default apply; never invent a level.
-- The old `-t none` / "zero tools" claim is gone on purpose: it was not
-  reproducible on this build. `-t ""` resolves to the plugin toolsets only, and
-  that is the smallest surface a reviewer run can be given here.
+- The old `-t none` / "zero tools" claim is gone on purpose: it was contradicted,
+  not flaky. `-t none` is refused at launch on this build (deterministic
+  `invalid_params`, exit 1, 0 tokens). `-t ""` resolves to the plugin
+  toolsets only, and that is the smallest surface a reviewer run can be given
+  here.
 - `--ignore-rules` skips injection of memory, `AGENTS.md`/`SOUL.md` and preloaded
   skills, so the reviewer sees only the brief.
 - `--in <scratch-dir>` scopes the reviewer's working directory. This is **defense
@@ -351,7 +361,8 @@ approved | approved with observations | changes recommended | changes required b
 - **Faking independence**: running the main agent (same session/model) and
   calling it a reviewer. Never do this; if no reviewer is configured, say so.
 - **No flag disables tools on this build.** `-t none` is refused at launch
-  (`invalid_params`, exit 1) and `--safe-mode` failed before any model call;
+  (`invalid_params`, exit 1) and `--safe-mode` failed before any model response
+  (0 tokens);
   `-t ""` is accepted and resolves to the plugin toolsets only. Never claim "zero
   tools": use `-t ""`, keep the brief's prohibition explicit, and confirm zero
   `tool_use` events in the stream. See `references/toolset-contract.md`.
@@ -379,8 +390,8 @@ approved | approved with observations | changes recommended | changes required b
   before using a block there, or run it through git-bash.
 - **Treating version-validated behaviour as a guarantee.** The toolset
   resolution (see `references/toolset-contract.md`) and the `--source oneshot`
-  findings were validated on one Hermes version, one provider and the CLI launch
-  path. Re-validate after a CLI upgrade instead of assuming.
+  findings were validated on one Hermes version, one provider, one model and the
+  CLI launch path. Re-validate after a CLI upgrade instead of assuming.
 - **Claiming untested platforms.** This skill is Windows-tested; do not extend
   `platforms` without actually running it elsewhere.
 

@@ -11,8 +11,9 @@ mesmo modelo, em vez de afirmar independência de modelo.
 
 Uma revisão feita por um processo `hermes chat` separado, com modelo próprio,
 contexto limpo e sem as ferramentas de arquivo e de terminal, que analisa apenas
-o diff entregue no briefing. O revisor não vê o resto do repositório, não executa
-comandos e não escreve nada.
+o diff entregue no briefing. O revisor não vê o resto do repositório e não executa
+comandos; e, por determinação do briefing, não usa as ferramentas de plugin que
+ainda restam no processo (`references/toolset-contract.md`).
 
 O problema que ela resolve: um agente revisando a própria mudança no próprio
 contexto é um revisor fraco. Ele já "sabe" o que pretendia, então relê o mesmo
@@ -102,8 +103,9 @@ Todo o valor está no isolamento. São três barreiras:
    revisor vê apenas o briefing e o diff.
 3. **Isolamento de capacidade (parcial, medido)**: nesta build não existe flag
    que deixe o revisor com zero ferramentas. `-t none` é recusado no lançamento
-   (`invalid_params`), `--safe-mode` falhou antes de qualquer chamada ao modelo e
-   `-t ""` resolve para os toolsets de plugin, a menor superfície disponível.
+   (`invalid_params`), `--safe-mode` falhou antes de qualquer resposta do modelo
+   (0 tokens) e `-t ""` resolve para os toolsets de plugin, a menor superfície
+   disponível.
    O que impede a escrita não é a ausência de ferramenta, e sim o briefing (que
    proíbe qualquer uso de ferramenta) somado à checagem de zero eventos
    `tool_use` no stream. Ele analisa o diff entregue dentro do briefing e nada
@@ -133,8 +135,10 @@ A obtenção do diff é estritamente somente leitura: nenhum `add`, `commit`,
 O revisor é somente leitura por contrato: o briefing proíbe editar, executar ou
 publicar qualquer coisa, e a skill confere depois que nada mudou. Isso **não**
 vem de o processo estar sem ferramentas: nesta build nenhuma flag zera as
-ferramentas (veja `references/toolset-contract.md`), então a garantia é a
-proibição explícita mais a checagem de zero eventos `tool_use` no stream. A
+ferramentas (veja `references/toolset-contract.md`), então a barreira é a
+proibição explícita mais a checagem de zero eventos `tool_use` no stream: a
+proibição é mitigação e a checagem detecta uma violação depois que ela ocorreu,
+nem uma nem outra previne.
 execução ainda é delimitada com `--in <scratch-dir>` e `--ignore-rules`, como
 **defesa em profundidade, não como sandbox**. Depois da execução, o autor
 verifica que `git status --short` continua igual.
@@ -207,7 +211,8 @@ informa a ausência em vez de fingir ser independente.
   Não presuma comportamento em Linux ou macOS que não foi testado.
 - **Comportamento dependente de versão.** A resolução de toolsets (veja
   `references/toolset-contract.md`) e os achados sobre `--source oneshot` foram
-  medidos em uma versão do Hermes, um provider e o caminho de lançamento da CLI.
+  medidos em uma versão do Hermes, um provider, um modelo e o caminho de
+  lançamento da CLI.
   Revalide depois de atualizar a CLI.
 - **Oculta do seletor não é oculta do armazenamento.** As execuções one-shot
   ficam fora dos seletores de sessão do Desktop, mas `hermes sessions list`
