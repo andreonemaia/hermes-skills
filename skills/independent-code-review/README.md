@@ -1,18 +1,18 @@
 # independent-code-review
 
-Obtenha uma revisão de código de um **processo revisor separado**, sem
-ferramentas e sem acesso à conversa do autor, configurado para rodar um modelo
-diferente do que escreveu o código. O relatório informa se o modelo realmente
-foi diferente: quando o revisor configurado roda o mesmo modelo do autor, a
-skill relata uma segunda opinião do mesmo modelo, em vez de afirmar
-independência de modelo.
+Obtenha uma revisão de código de um **processo revisor separado**, com a menor
+superfície de ferramentas disponível e sem acesso à conversa do autor,
+configurado para rodar um modelo diferente do que escreveu o código. O
+relatório informa se o modelo realmente foi diferente: quando o revisor
+configurado roda o mesmo modelo do autor, a skill relata uma segunda opinião do
+mesmo modelo, em vez de afirmar independência de modelo.
 
 ## O que é
 
 Uma revisão feita por um processo `hermes chat` separado, com modelo próprio,
-contexto limpo e nenhuma ferramenta, que analisa apenas o diff entregue no
-briefing. O revisor não vê o resto do repositório, não executa comandos e não
-escreve nada.
+contexto limpo e sem as ferramentas de arquivo e de terminal, que analisa apenas
+o diff entregue no briefing. O revisor não vê o resto do repositório, não executa
+comandos e não escreve nada.
 
 O problema que ela resolve: um agente revisando a própria mudança no próprio
 contexto é um revisor fraco. Ele já "sabe" o que pretendia, então relê o mesmo
@@ -27,8 +27,10 @@ A skill resolve isso tornando o revisor uma execução realmente separada:
   estiver configurada, a skill para e pergunta, em vez de fingir que existe um
   revisor);
 - um **contexto limpo** (`--ignore-rules`, sem conversa compartilhada);
-- **zero ferramentas** (`-t none`), então ele só pode raciocinar sobre o diff
-  que você entrega;
+- **a menor superfície de ferramentas disponível** (`-t ""`, que resolve para os
+  toolsets de plugin), mais um briefing que proíbe qualquer uso de ferramenta;
+  nenhuma flag zera as ferramentas nesta build (veja
+  `references/toolset-contract.md`);
 - uma **execução única e finita** (`--oneshot --source oneshot`), fora dos
   seletores de sessão do Desktop e do TUI.
 
@@ -77,7 +79,7 @@ comentar nada no GitHub.
                    ▼
         ┌──────────────────────────────┐
         │ separate hermes chat process │   3. brief file (--query-file)
-        │  -t none  --ignore-rules     │      diff embedded, no tools
+        │  -t ""    --ignore-rules     │      diff embedded, no tool use
         │  --oneshot --source oneshot  │      no shared context
         └──────────┬───────────────────┘
                    │ 4. stream-json: init event -> actual model
@@ -98,12 +100,16 @@ Todo o valor está no isolamento. São três barreiras:
 2. **Isolamento de contexto**: `--ignore-rules` impede que memória,
    `AGENTS.md`/`SOUL.md` e skills pré-carregadas sejam injetados, então o
    revisor vê apenas o briefing e o diff.
-3. **Isolamento de capacidade**: `-t none` não carrega nenhuma ferramenta, então
-   o revisor não pode ler o resto do repositório, não pode executar comandos e
-   não pode escrever nada. Ele analisa o diff entregue dentro do briefing e nada
-   mais. Isso é ausência de capacidade no processo revisor, não um sandbox de
-   kernel: a garantia depende de a CLI honrar `-t none` (revalide isso a cada
-   atualização da CLI).
+3. **Isolamento de capacidade (parcial, medido)**: nesta build não existe flag
+   que deixe o revisor com zero ferramentas. `-t none` é recusado no lançamento
+   (`invalid_params`), `--safe-mode` falhou antes de qualquer chamada ao modelo e
+   `-t ""` resolve para os toolsets de plugin, a menor superfície disponível.
+   O que impede a escrita não é a ausência de ferramenta, e sim o briefing (que
+   proíbe qualquer uso de ferramenta) somado à checagem de zero eventos
+   `tool_use` no stream. Ele analisa o diff entregue dentro do briefing e nada
+   mais. Um diretório separado não é sandbox, e "nenhum `tool_use` no stream" é
+   uma observação sobre aquela execução, não uma afirmação de capacidade.
+   Medições e reprodução: `references/toolset-contract.md`.
 
 Qualquer coisa além do diff de que o revisor precise (requisitos, critérios de
 aceite, arquitetura) é acrescentada ao briefing de propósito, pelo autor, de
@@ -124,11 +130,14 @@ A obtenção do diff é estritamente somente leitura: nenhum `add`, `commit`,
 
 ### Modo somente leitura
 
-O revisor é somente leitura por construção: `-t none` o deixa sem nenhuma
-ferramenta capaz de escrever em qualquer lugar. A execução ainda é delimitada
-com `--in <scratch-dir>` e `--ignore-rules`, como **defesa em profundidade, não
-como sandbox**. Depois da execução, o autor verifica que `git status --short`
-continua igual.
+O revisor é somente leitura por contrato: o briefing proíbe editar, executar ou
+publicar qualquer coisa, e a skill confere depois que nada mudou. Isso **não**
+vem de o processo estar sem ferramentas: nesta build nenhuma flag zera as
+ferramentas (veja `references/toolset-contract.md`), então a garantia é a
+proibição explícita mais a checagem de zero eventos `tool_use` no stream. A
+execução ainda é delimitada com `--in <scratch-dir>` e `--ignore-rules`, como
+**defesa em profundidade, não como sandbox**. Depois da execução, o autor
+verifica que `git status --short` continua igual.
 
 ### Confirmando qual modelo realmente rodou
 
@@ -196,9 +205,10 @@ informa a ausência em vez de fingir ser independente.
 
 - **Testada apenas no Windows.** Esta versão declara `platforms: [windows]`.
   Não presuma comportamento em Linux ou macOS que não foi testado.
-- **Comportamento dependente de versão.** Os achados sobre `-t none` e
-  `--source oneshot` foram validados em uma versão do Hermes. Revalide depois de
-  atualizar a CLI.
+- **Comportamento dependente de versão.** A resolução de toolsets (veja
+  `references/toolset-contract.md`) e os achados sobre `--source oneshot` foram
+  medidos em uma versão do Hermes, um provider e o caminho de lançamento da CLI.
+  Revalide depois de atualizar a CLI.
 - **Oculta do seletor não é oculta do armazenamento.** As execuções one-shot
   ficam fora dos seletores de sessão do Desktop, mas `hermes sessions list`
   continua mostrando as sessões, e `hermes -c` pode continuar a última delas. A

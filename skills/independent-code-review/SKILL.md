@@ -21,8 +21,8 @@ skill covers GitHub PRs, local branch diffs, staged changes, and uncommitted
 changes. It never publishes to GitHub and never edits code on its own.
 
 **Core principle:** an agent must not review its own work in its own context. A
-fresh process, a separate model, and zero tools find what the implementer's
-context hides.
+fresh process, a separate model and a brief that forbids every tool find what the
+implementer's context hides.
 
 ## When to Use
 
@@ -60,12 +60,13 @@ git diff --cached              # staged
 git diff                       # unstaged
 git diff <A>..<B>              # explicit range
 
-# 3. Run the isolated reviewer (one-shot, no toolsets: -t none, never -t "")
+# 3. Run the isolated reviewer (one-shot; no flag zeroes the tools on this build,
+#    so -t "" (smallest measured surface) plus the brief is the barrier)
 #    pass --reasoning only if auxiliary.review.reasoning_effort is configured
 mkdir -p "<scratch-dir>"
 hermes chat --query-file <brief.md> \
   -m <model> --provider <provider> --reasoning <level> \
-  -t none --ignore-rules -Q --max-turns 2 \
+  -t "" --ignore-rules -Q --max-turns 2 \
   --in <scratch-dir> --format stream-json --source oneshot \
   > "<scratch-dir>/review.jsonl"
 ```
@@ -170,28 +171,42 @@ the truncation instead of reviewing a partial diff silently.
 mkdir -p "<scratch-dir>"
 hermes chat --query-file <brief> \
   -m <model> --provider <provider> --reasoning <level> \
-  -t none --ignore-rules -Q --max-turns 2 \
+  -t "" --ignore-rules -Q --max-turns 2 \
   --in <scratch-dir> --format stream-json --source oneshot \
   > "<scratch-dir>/review.jsonl"
 ```
 
-- `<model>` and `<provider>` come from Step 1. Provider identifiers (`custom`,
-  `openai`, `anthropic`, ...) and full display names are both accepted.
+- **Toolset contract (measured, this build).** No flag leaves the reviewer with
+  zero tools. `-t none` is refused at launch (`invalid_params`, exit 1, no model
+  call). `-t ""` is accepted and resolves to the **plugin toolsets only**
+  (`OpenPencil`, `web-search-plus`), a smaller surface than the default (16
+  platform toolsets plus those two); omitting `-t` loads the default. `--safe-mode`
+  drops the plugin toolsets but failed in every probe about two seconds in, after
+  `init` and before any model response (zero tokens, generic lost-turn text), so it
+  is not a usable zero-tool mode here and its cause was not isolated. Details,
+  reproduction commands and the scope of the measurement:
+  `references/toolset-contract.md`.
+- The reviewer's read-only guarantee is therefore **the brief plus the stream
+  check**, not a missing tool: the brief forbids every write/execute action, and
+  Step 4 requires zero `tool_use` events in the stream. Report the toolsets that
+  were actually in effect instead of claiming a tool-free process.
+- `<model>` and `<provider>` come from Step 1. Use the provider's real name as it
+  appears under `providers:` in `config.yaml`; the literal `custom` is refused at
+  launch (`provider 'custom' resolved without credentials ... use its real name`)
+  unless the profile actually defines a provider with that name.
 - `--reasoning <level>` comes from `auxiliary.review.reasoning_effort` when that
   key is present. If it is absent, omit `--reasoning` entirely and let the CLI
   default apply; never invent a level.
-- `-t none` yields **zero tools** (verified with `-v`: "No tools loaded"). Do
-  NOT use `-t ""`: an empty value falls back to the default toolsets and the
-  reviewer runs with full tools. `-t none` prints a cosmetic
-  `Warning: Unknown toolsets: none`; that warning is expected. Version-dependent:
-  re-validate on a CLI change.
+- The old `-t none` / "zero tools" claim is gone on purpose: it was not
+  reproducible on this build. `-t ""` resolves to the plugin toolsets only, and
+  that is the smallest surface a reviewer run can be given here.
 - `--ignore-rules` skips injection of memory, `AGENTS.md`/`SOUL.md` and preloaded
   skills, so the reviewer sees only the brief.
 - `--in <scratch-dir>` scopes the reviewer's working directory. This is **defense
-  in depth**, not a sandbox: the real write barrier is `-t none`, which leaves the
-  process with no tool able to write anywhere.
-- `--max-turns 2` keeps the run finite even if tools were ever re-enabled; with
-  zero tools it is inert.
+  in depth**, not a sandbox: a separate directory is not isolation by itself, and
+  it is not the write barrier either. The barrier is the brief's prohibition plus
+  the zero-`tool_use` check in Step 4.
+- `--max-turns 2` keeps the run finite; it is a bound, not a capability limit.
 - `-Q` (or `--oneshot`) makes the run finite and non-interactive; combined with
   `--source oneshot` it is tagged as an internal auxiliary run, hidden from the
   Desktop/TUI/dashboard pickers (see **Auxiliary runs are internal
@@ -227,8 +242,11 @@ Parse the stream for the init event:
 
 The reviewer is strictly read-only: no editing, creating, moving or deleting
 files; no commit, push or merge; no branch or remote changes; no published
-comments; no dependency installs. Supply any extra context yourself in the
-brief. After the run, confirm nothing changed (`git status --short` still
+comments; no dependency installs. That is a requirement stated in the brief and
+verified in the stream, not a consequence of the reviewer lacking tools (no flag
+zeroes the toolset on this build; see `references/toolset-contract.md`). Supply
+any extra context yourself in the brief. After the run, confirm nothing changed
+(`git status --short` still
 matches) and that no write operation ran.
 
 ### Step 6 - Reviewer briefing
@@ -332,9 +350,15 @@ approved | approved with observations | changes recommended | changes required b
 
 - **Faking independence**: running the main agent (same session/model) and
   calling it a reviewer. Never do this; if no reviewer is configured, say so.
-- **`-t ""` does not disable tools** - it silently re-enables the default
-  toolsets. Use `-t none`, which really loads zero tools. Confirm with `-v`
-  ("No tools loaded") or with zero `tool_use` events in the stream.
+- **No flag disables tools on this build.** `-t none` is refused at launch
+  (`invalid_params`, exit 1) and `--safe-mode` failed before any model call;
+  `-t ""` is accepted and resolves to the plugin toolsets only. Never claim "zero
+  tools": use `-t ""`, keep the brief's prohibition explicit, and confirm zero
+  `tool_use` events in the stream. See `references/toolset-contract.md`.
+- **Zero `tool_use` events prove absence in the run you inspected, nothing more.**
+  A clean transcript is not proof that the reviewer *cannot* call tools, and a
+  separate scratch directory is not a sandbox. Report what was observed in that
+  run, and keep the brief's prohibition in place.
 - **Provider is not in the stream.** Only the model appears in the init event;
   report the provider from config, not from the stream.
 - **`hermes config get` warns on unknown dotted keys.** Read the printed value;
@@ -353,9 +377,10 @@ approved | approved with observations | changes recommended | changes required b
   command blocks are POSIX-shell syntax (bash / git-bash). PowerShell is not
   drop-in compatible; translate line continuations, `grep`/`wc` and redirection
   before using a block there, or run it through git-bash.
-- **Treating version-validated behaviour as a guarantee.** The `-t none` and
-  `--source oneshot` findings were validated on one Hermes version. Re-validate
-  after a CLI upgrade instead of assuming.
+- **Treating version-validated behaviour as a guarantee.** The toolset
+  resolution (see `references/toolset-contract.md`) and the `--source oneshot`
+  findings were validated on one Hermes version, one provider and the CLI launch
+  path. Re-validate after a CLI upgrade instead of assuming.
 - **Claiming untested platforms.** This skill is Windows-tested; do not extend
   `platforms` without actually running it elsewhere.
 
@@ -364,7 +389,7 @@ approved | approved with observations | changes recommended | changes required b
 - [ ] Reviewer provider/model read from `auxiliary.review` (or absence reported).
 - [ ] Diff acquired read-only; source stated.
 - [ ] Reviewer ran in a separate `hermes chat` process with explicit provider/model.
-- [ ] `-t none` used; tool-use count in the stream is `0`.
+- [ ] `-t ""` used (smallest measured surface); tool-use count in the stream is `0`; the toolsets actually in effect were recorded and reported.
 - [ ] Auxiliary run was one-shot (`-Q`/`--oneshot`) with `--source oneshot`; no interactive auxiliary session and no session deleted.
 - [ ] Init event model matches the configured model; fallback checked and reported.
 - [ ] Report states whether the reviewer model differs from the implementer's.
