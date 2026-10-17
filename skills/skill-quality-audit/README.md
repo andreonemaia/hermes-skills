@@ -109,7 +109,9 @@ Os dois campos têm três estados, nunca dois: `true` (verificado), `false`
 (divergência observada) e `null` (inconclusivo, porque algum arquivo não pôde ser
 lido). Conteúdo ilegível nunca vira digest válido: ele aparece em
 `manifest_unreadable`, a comparação fica incompleta e o resultado é
-inconclusivo.
+inconclusivo. O campo `reference_compared` diz se a comparação chegou a
+acontecer: sem `--check-unchanged` ele é `false` e `matches_reference` é `null`,
+que é "não comparado", não uma afirmação de igualdade.
 
 Um alvo pode ficar estável durante a execução e ainda divergir de uma referência
 antiga. Esse caso sai como `target_unchanged: true`, `matches_reference: false`,
@@ -126,9 +128,10 @@ observada durante a própria auditoria.
 | 3 | uso incorreto da linha de comando |
 | 4 | falha ao gravar a saída pedida |
 | 5 | o alvo mudou durante a auditoria (diferença observada entre os manifestos de antes e depois) |
+| 6 | falha interna inesperada do auditor: não há relatório em que se possa confiar |
 
 Os códigos 1 e 5 são resultado da auditoria: o relatório existe e traz o motivo.
-Os códigos 2, 3 e 4 são falha operacional: não há relatório. Uma pipeline que
+Os códigos 2, 3, 4 e 6 são falha operacional: não há relatório. Uma pipeline que
 trata 1 como "achado" e 2 a 4 como "erro" não precisa interpretar o texto.
 Pedir `--out` dentro do alvo é recusa de uso (3), não falha de gravação (4):
 o arquivo não chega a ser criado. `manifest` sem alvo válido também sai com 2.

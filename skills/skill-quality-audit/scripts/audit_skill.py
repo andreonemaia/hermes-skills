@@ -161,8 +161,9 @@ REPORT_LIMITS = (
     "A auditoria não importa nem instala o alvo, portanto não mede desempenho, "
     "corretude de execução nem compatibilidade real com as plataformas declaradas.",
     "Links externos (http/https), âncoras e caminhos com placeholder não são "
-    "resolvidos. Comandos dentro de blocos cercados são conferidos: é a forma "
-    "normal de documentar uma invocação.",
+    "resolvidos, e links em blocos cercados não são verificados. Comandos "
+    "dentro de blocos cercados são conferidos, e caminhos concretos também: é "
+    "a forma normal de documentar uma invocação.",
     "Nomes de repositório ou serviço privado sem formato reconhecível não são "
     "detectáveis por padrão: ficam para a revisão semântica (SQA-103, SQA-105).",
     "A detecção de privacidade é baseada em formato: um valor com formato de "
@@ -190,8 +191,12 @@ class Context:
             "text_files": [entry["rel"] for entry in self.text_entries],
             "skipped": [],
             "excluded_suffixes": self.excluded_files,
+            "symlinks": [
+                entry["rel"] for entry in self.entries if entry["kind"] == "symlink"
+            ],
             "entry_count": len(self.entries),
         }
+        self._excluded_rels = {item["rel"] for item in self.excluded_files}
         self._texts: dict[str, str | None] = {}
         self._states: dict[str, str] = {}
         self._memo: dict[str, object] = {}
@@ -218,7 +223,10 @@ class Context:
             value, state = common.read_text_state(entry["abs"])
         self._texts[rel] = value
         self._states[rel] = state
-        if state in ("unreadable", "binary", "undecodable"):
+        # A file already declared as excluded by suffix is not counted twice:
+        # "skipped" means "present, tried, unreadable", not "outside the scan".
+        already_excluded = rel in self._excluded_rels
+        if state in ("unreadable", "binary", "undecodable") and not already_excluded:
             self.coverage["skipped"].append({"rel": rel, "reason": state})
         return value, state
 
@@ -1595,8 +1603,11 @@ def audit_target(
     limits: list[dict] = []
     reported: list[dict] = []
     checks_run: list[dict] = []
-    # ``None`` means "not compared"; ``True``/``False`` are evidence-backed.
+    # ``None`` means "not compared" or "compared but inconclusive"; the
+    # ``reference_compared`` flag tells the two apart, so a default run never
+    # claims a comparison it did not make.
     reference_ok: bool | None = None
+    reference_compared = reference_manifest is not None
 
     if reference_manifest:
         reference = common.load_manifest(reference_manifest)
@@ -1701,7 +1712,7 @@ def audit_target(
             "; o manifesto de referência difere do estado atual: divergência de "
             "referência, não alteração durante a auditoria"
         )
-    elif reference_ok is None:
+    elif reference_compared and reference_ok is None:
         integrity_reason += (
             "; o manifesto de referência não pôde ser confirmado por conteúdo "
             "ilegível"
@@ -1756,6 +1767,7 @@ def audit_target(
         "manifest_diff": run_diff,
         "manifest_unreadable": manifest_after.get("unreadable", []),
         "matches_reference": reference_ok,
+        "reference_compared": reference_compared,
         "target_unchanged": unchanged,
         "coverage": ctx.coverage,
         "findings": findings,

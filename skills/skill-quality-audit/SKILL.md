@@ -76,7 +76,8 @@ python scripts/render_checks.py --check
 | 2 | target missing or not a directory |
 | 3 | command line misuse |
 | 4 | could not write the requested output |
-| 5 | the target changed while it was being audited |
+| 5 | the target changed while it was being audited (a difference observed between the before and after manifests of this run) |
+| 6 | the auditor itself failed unexpectedly; there is no trustworthy report |
 
 `--fail-on` defaults to `high`; `never` keeps findings in the report and makes
 the exit code ignore them.
@@ -89,8 +90,16 @@ the exit code ignore them.
 python scripts/audit_skill.py manifest --target <skill-dir> --out before.json
 ```
 
-Keep the manifest. It is the evidence that the audit window did not modify the
-target, and it is what you compare at the end.
+Keep the manifest. It answers one question only: did the target move while the
+audit ran? Pass it back with `--check-unchanged`, which compares against it and
+reports the answer separately in `matches_reference`. A target can stay stable
+during the run and still differ from an older reference; that is a reference
+divergence (critical SQA-026, exit 1), not a change observed during the audit
+(exit 5). When a file cannot be read, both comparisons stay inconclusive
+(`null`, with `manifest_unreadable` naming it) instead of claiming "unchanged".
+`reference_compared` says whether the comparison happened at all: without
+`--check-unchanged` it is `false` and `matches_reference` is `null`, meaning "not
+compared", never "equal".
 
 ### Step 2: run the structural audit
 

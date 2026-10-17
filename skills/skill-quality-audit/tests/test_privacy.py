@@ -150,6 +150,10 @@ class PrivacyClassTest(unittest.TestCase):
             self.assertNotIn(INTERNAL_HOST, item["evidence"])
             self.assertNotIn(PRIVATE_IP, item["evidence"])
 
+    def test_version_strings_are_not_private_addresses(self):
+        report = _audit_files({"docs/changes.md": "corrigido na v3.10.0.1\n"})
+        self.assertEqual(support.findings(report, "SQA-022"), [])
+
     def test_placeholders_are_not_findings(self):
         report = _audit_files(
             {

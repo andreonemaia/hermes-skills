@@ -7,6 +7,7 @@ single ``None`` would let the report claim "file absent" for a file that exists.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import tempfile
 import unittest
@@ -54,6 +55,32 @@ class TextStateTest(unittest.TestCase):
             text, state = ctx.text_state("README.md")
         self.assertIsNone(text)
         self.assertEqual(state, "unreadable")
+
+    def test_excluded_suffix_is_not_counted_again_as_skipped(self):
+        (self.root / "imagem.png").write_bytes(b"\x00\x01")
+        ctx = Context(str(self.root))
+        text, state = ctx.text_state("imagem.png")
+        self.assertIsNone(text)
+        self.assertEqual(state, "binary")
+        self.assertNotIn("imagem.png", [item["rel"] for item in ctx.coverage["skipped"]])
+        self.assertIn(
+            "imagem.png",
+            [item["rel"] for item in ctx.coverage["excluded_suffixes"]],
+        )
+
+    def test_symlink_is_declared_in_coverage(self):
+        try:
+            os.symlink("README.md", self.root / "atalho")
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink indisponível neste host")
+        ctx = Context(str(self.root))
+        self.assertIn("atalho", ctx.coverage["symlinks"])
+
+    def test_bom_is_stripped_from_decoded_text(self):
+        (self.root / "bom.md").write_bytes("\ufeff# título\n".encode("utf-8"))
+        text, state = Context(str(self.root)).text_state("bom.md")
+        self.assertEqual(state, "ok")
+        self.assertEqual(text, "# título\n")
 
     def test_binary_file_is_its_own_state(self):
         (self.root / "blob.bin").write_bytes(b"\x00\x01\x02")

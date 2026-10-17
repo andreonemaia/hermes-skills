@@ -57,6 +57,10 @@ A auditoria é somente leitura sobre o alvo, e isso é demonstrado, não afirmad
   entre duas execuções. Divergência de referência é achado crítico SQA-026, mas
   não reescreve `target_unchanged`: ela responde a outra pergunta.
 
+O campo `reference_compared` separa "não comparado" de "inconclusivo": numa
+execução sem `--check-unchanged` ele é `false` e `matches_reference` é `null` sem
+que nenhum limite seja acrescentado.
+
 Três estados, nunca dois. `target_unchanged` e `matches_reference` podem ser
 `true`, `false` ou `null`:
 

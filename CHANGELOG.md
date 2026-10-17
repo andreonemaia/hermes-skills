@@ -31,6 +31,15 @@ skill é o campo `version` do seu próprio `SKILL.md`.
   leitura indisponível simulada de forma determinística, referência divergente
   com alvo estável, mudança no meio da execução e os três estados de
   `text_state`.
+- `skill-quality-audit`: o relatório passa a expor `reference_compared`, que
+  separa "não comparado" (execução sem `--check-unchanged`) de "inconclusivo",
+  para que uma execução padrão nunca insinue uma comparação de referência que não
+  fez. O código de saída 6 (falha interna do auditor) entra nas tabelas de
+  `README.md` e `SKILL.md`, e o limite de cobertura volta a declarar que links
+  dentro de blocos cercados não são verificados. Alvo de symlink cujo destino não
+  pode ser lido passa a ser valor desconhecido (`null`), nunca a string
+  `"unreadable"`, e `utf-8-sig` é tentado antes de `utf-8` para que o BOM não
+  fique no texto decodificado.
 
 ### Changed
 

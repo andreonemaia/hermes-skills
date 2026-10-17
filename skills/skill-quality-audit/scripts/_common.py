@@ -217,7 +217,10 @@ PRIVACY_PATTERNS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
         "private_ipv4",
         "SQA-022",
         re.compile(
-            r"\b((?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?:\.\d{1,3})?)\b"
+            # The lookbehind keeps a version like ``v3.10.0.1`` from matching on
+            # its tail: a dotted number that continues an earlier dotted number
+            # is not an address.
+            r"(?<![.\d])((?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?:\.\d{1,3})?)\b"
         ),
     ),
 )
@@ -417,7 +420,9 @@ def read_text_state(path: str) -> tuple[str | None, str]:
         return None, "unreadable"
     if b"\x00" in raw[:4096]:
         return None, "binary"
-    for encoding in ("utf-8", "utf-8-sig", "cp1252"):
+    # ``utf-8-sig`` first: it decodes BOM-less UTF-8 as well, and strips the
+    # BOM when present, so no file silently keeps ``\ufeff`` in its text.
+    for encoding in ("utf-8-sig", "utf-8", "cp1252"):
         try:
             return raw.decode(encoding), "ok"
         except UnicodeDecodeError:
@@ -459,12 +464,17 @@ def build_manifest(root: str) -> dict:
             try:
                 target = os.readlink(entry["abs"])
             except OSError:
-                target = "unreadable"
+                # ``None`` keeps "could not read the link" out of the value
+                # space: two unknown targets never compare as equal.
+                target = None
             entries[rel] = {"kind": "symlink", "target": target}
         elif entry["kind"] == "dir":
             entries[rel] = {"kind": "dir"}
         else:
-            size = os.path.getsize(entry["abs"]) if os.path.exists(entry["abs"]) else 0
+            try:
+                size = os.path.getsize(entry["abs"])
+            except OSError:
+                size = 0
             entries[rel] = {
                 "kind": "file",
                 "size": size,
@@ -490,11 +500,19 @@ def build_manifest(root: str) -> dict:
 
 
 def unreadable_entries(entries: dict) -> list[str]:
-    """Relative paths whose content could not be hashed, sorted."""
+    """Relative paths whose content could not be read, sorted.
+
+    A file whose content could not be hashed and a symlink whose target could
+    not be resolved are both unknown values: they never prove equality.
+    """
     return sorted(
         rel
         for rel, value in entries.items()
-        if isinstance(value, dict) and value.get("sha256", "") is None
+        if isinstance(value, dict)
+        and (
+            value.get("sha256", "") is None
+            or (value.get("kind") == "symlink" and value.get("target", "") is None)
+        )
     )
 
 
@@ -966,9 +984,12 @@ def render_markdown(report: dict) -> str:
         f"digest `{report['manifest']['digest'][:16]}...`")
     add(f"- Alvo inalterado durante a auditoria: "
         f"{_tri_state(report.get('target_unchanged'))}")
-    if report.get("matches_reference") is not None:
+    if report.get("reference_compared"):
         add(f"- Confere com o manifesto de referência: "
             f"{_tri_state(report.get('matches_reference'))}")
+    else:
+        add("- Confere com o manifesto de referência: não comparado "
+            "(sem `--check-unchanged`)")
     unreadable = report.get("manifest_unreadable") or []
     if unreadable:
         listed = ", ".join(f"`{rel}`" for rel in unreadable)
@@ -1031,6 +1052,11 @@ def render_markdown(report: dict) -> str:
             add(f"  - `{item['rel']}`: {item['reason']}")
     else:
         add("- Arquivos presentes mas não lidos: nenhum")
+    symlinks = coverage.get("symlinks") or []
+    if symlinks:
+        add(f"- Links simbólicos (não seguidos, não lidos) ({len(symlinks)}):")
+        for rel in symlinks:
+            add(f"  - `{rel}`")
     excluded = coverage.get("excluded_suffixes") or []
     by_reason: dict[str, list[str]] = {}
     for item in excluded:

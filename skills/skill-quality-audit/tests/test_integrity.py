@@ -128,9 +128,14 @@ class UnreadableContentTest(unittest.TestCase):
                 report = support.audit(root, reference_manifest=str(reference))
 
             self.assertIsNone(report["matches_reference"])
+            self.assertTrue(report["reference_compared"])
             self.assertIsNone(report["target_unchanged"])
             self.assertNotIn("SQA-026", support.codes(report))
             self.assertNotEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
+            markdown = support.common.render_markdown(report)
+            self.assertIn(
+                "Confere com o manifesto de referência: inconclusivo", markdown
+            )
 
 
 class RunComparisonTest(unittest.TestCase):
@@ -156,6 +161,37 @@ class RunComparisonTest(unittest.TestCase):
             self.assertEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
             finding = support.findings(report, "SQA-026")[0]
             self.assertIn("durante a auditoria", finding["evidence"])
+
+
+class NotComparedTest(unittest.TestCase):
+    def test_default_run_never_claims_a_reference_comparison(self):
+        """Without ``--check-unchanged`` there is no reference fact to report."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            report = support.audit(root)
+
+            self.assertIsNone(report["matches_reference"])
+            self.assertFalse(report["reference_compared"])
+            integrity = [
+                row for row in report["checks_run"] if row["code"] == "SQA-026"
+            ][0]
+            self.assertNotIn("referência", integrity["reason"])
+            self.assertNotIn("ilegível", integrity["reason"])
+            markdown = support.common.render_markdown(report)
+            self.assertIn("não comparado", markdown)
+
+
+class UnreadableSymlinkTest(unittest.TestCase):
+    def test_symlink_with_unknown_target_is_unverifiable_not_equal(self):
+        """``None`` target is an unknown value: two of them never prove equality."""
+        before = {"entries": {"atalho": {"kind": "symlink", "target": None}}}
+        after = {"entries": {"atalho": {"kind": "symlink", "target": None}}}
+        self.assertIn("atalho", support.common.unreadable_entries(before["entries"]))
+        diff = support.common.diff_manifests(before, after)
+        self.assertEqual(diff["unverifiable"], ["atalho"])
+        self.assertEqual(diff["changed"], [])
+        self.assertFalse(diff["complete"])
+        self.assertTrue(diff["identical"])
 
 
 class ReferenceManifestTest(unittest.TestCase):
@@ -190,6 +226,35 @@ class ReferenceManifestTest(unittest.TestCase):
             self.assertIn("não", support.common.render_markdown(report).split(
                 "Confere com o manifesto de referência: "
             )[1].split("\n")[0])
+            self.assertTrue(report["reference_compared"])
+
+    def test_divergence_and_run_change_stay_two_separate_findings(self):
+        """Reference divergence never hides a change observed during the run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            reference = pathlib.Path(tmp) / "reference.json"
+            write_manifest(root, reference)
+            (root / "README.md").write_text("# versão nova\n", encoding="utf-8")
+            real = support.common.build_manifest
+            calls = {"n": 0}
+
+            def mutating(path):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    (pathlib.Path(path) / "novo.md").write_text("x\n", encoding="utf-8")
+                return real(path)
+
+            with mock.patch.object(support.common, "build_manifest", side_effect=mutating):
+                report = support.audit(root, reference_manifest=str(reference))
+
+            self.assertFalse(report["matches_reference"])
+            self.assertFalse(report["target_unchanged"])
+            self.assertEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
+            integrity = support.findings(report, "SQA-026")
+            self.assertEqual(len(integrity), 2)
+            evidences = " ".join(item["evidence"] for item in integrity)
+            self.assertIn("referência", evidences)
+            self.assertIn("durante a auditoria", evidences)
 
 
 if __name__ == "__main__":
