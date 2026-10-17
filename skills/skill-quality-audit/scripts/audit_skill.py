@@ -160,8 +160,9 @@ REPORT_LIMITS = (
     "nenhuma dependência é instalada e nenhum arquivo dele é corrigido.",
     "A auditoria não importa nem instala o alvo, portanto não mede desempenho, "
     "corretude de execução nem compatibilidade real com as plataformas declaradas.",
-    "Links externos (http/https), âncoras, placeholders e caminhos dentro de "
-    "blocos de código cercados não são resolvidos.",
+    "Links externos (http/https), âncoras e caminhos com placeholder não são "
+    "resolvidos. Comandos dentro de blocos cercados são conferidos: é a forma "
+    "normal de documentar uma invocação.",
     "Nomes de repositório ou serviço privado sem formato reconhecível não são "
     "detectáveis por padrão: ficam para a revisão semântica (SQA-103, SQA-105).",
     "A detecção de privacidade é baseada em formato: um valor com formato de "
@@ -1656,10 +1657,9 @@ def audit_target(
         unchanged = None
     else:
         unchanged = True
-    if reference_ok is False:
-        unchanged = False
-    elif reference_manifest and reference_ok is None and unchanged is True:
-        unchanged = None
+    # ``target_unchanged`` answers one question only: did the target move while
+    # this audit was running? Divergence from a reference manifest is a separate
+    # fact and never rewrites this field.
     if not run_diff["identical"]:
         findings.append(
             _integrity_finding(
@@ -1696,11 +1696,25 @@ def audit_target(
         )
     else:
         integrity_reason = "manifesto divergente: alvo alterado durante a auditoria"
+    if reference_ok is False:
+        integrity_reason += (
+            "; o manifesto de referência difere do estado atual: divergência de "
+            "referência, não alteração durante a auditoria"
+        )
+    elif reference_ok is None:
+        integrity_reason += (
+            "; o manifesto de referência não pôde ser confirmado por conteúdo "
+            "ilegível"
+        )
     checks_run.append(
         {
             "code": INTEGRITY_CODE,
             "method": "structural",
-            "status": "executed" if run_diff["identical"] else "executed_with_findings",
+            "status": (
+                "executed"
+                if run_diff["identical"] and reference_ok is not False
+                else "executed_with_findings"
+            ),
             "reason": integrity_reason,
         }
     )

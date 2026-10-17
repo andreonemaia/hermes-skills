@@ -20,6 +20,17 @@ skill é o campo `version` do seu próprio `SKILL.md`.
   catálogo em `references/checks.md` é gerado a partir de `scripts/checks.py` e
   conferido por `python scripts/render_checks.py --check`. Inclui piloto
   somente leitura nas quatro skills existentes, com manifestos antes e depois.
+- `skill-quality-audit`: a integridade do alvo passa a distinguir duas
+  comparações independentes. `target_unchanged` responde só se o alvo mudou
+  durante a execução; `matches_reference` responde se ele ainda confere com o
+  manifesto de `--check-unchanged`. Divergência de referência vira achado
+  SQA-026 crítico com código 1, sem reescrever a comparação antes/depois; o
+  código 5 fica reservado para mudança observada durante a auditoria. Arquivo
+  ilegível deixa a comparação incompleta e o resultado inconclusivo, nunca
+  "inalterado". Regressões novas cobrem arquivos legíveis iguais e diferentes,
+  leitura indisponível simulada de forma determinística, referência divergente
+  com alvo estável, mudança no meio da execução e os três estados de
+  `text_state`.
 
 ### Changed
 

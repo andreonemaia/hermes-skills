@@ -247,7 +247,7 @@ class CliTest(unittest.TestCase):
             self.assertEqual(code, support.common.EXIT_USAGE)
             self.assertIn("fail-on", err)
 
-    def test_changed_target_exits_five(self):
+    def test_reference_divergence_is_a_finding_not_a_run_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = support.build_skill(tmp)
             manifest = pathlib.Path(tmp) / "manifest.json"
@@ -260,8 +260,11 @@ class CliTest(unittest.TestCase):
                 encoding="utf-8",
             )
             report = support.audit(root, reference_manifest=str(manifest))
-            self.assertFalse(report["target_unchanged"])
-            self.assertEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
+            # The edit predates the run, so the run comparison is clean and the
+            # divergence shows up only against the reference manifest.
+            self.assertTrue(report["target_unchanged"])
+            self.assertFalse(report["matches_reference"])
+            self.assertEqual(report["exit_code"], support.common.EXIT_FINDINGS)
 
 
 if __name__ == "__main__":

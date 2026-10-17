@@ -328,7 +328,7 @@ Duas formas contam como citação do vocabulário, não como pendência: o marca
         default_severity="medium",
         summary="A skill afirma isolamento, somente leitura, ausência de rede ou outra garantia forte.",
         how="_check_capability_claims: sinal automático sobre a alegação; o agente confirma ou descarta em SQA-105. Ficam fora da varredura apenas títulos de seção (a alegação está na frase abaixo) e listas de metadados (tags, keywords, category). Documentos gerados e frases que citam testes, manifestos ou checksums continuam na varredura: nomear uma evidência não comprova a alegação.",
-        limits="O sinal não decide se a alegação é verdadeira, apenas onde olhar. Uma linha apoiada em manifesto ou teste permanece reported até que o agente confira a evidência. O auditor não executa o alvo: alegações não executadas permanecem reported ou unverifiable.",
+        limits="O sinal não decide se a alegação é verdadeira, apenas onde olhar. Uma linha apoiada em manifesto ou teste permanece reported até que o agente confira a evidência. O auditor não executa o alvo: alegações não executadas permanecem reported ou unverifiable. Blocos cercados ficam fora da varredura: são exemplo de texto, não promessa da skill.",
     ),
     Check(
         code="SQA-026",

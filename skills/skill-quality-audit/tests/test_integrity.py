@@ -133,6 +133,31 @@ class UnreadableContentTest(unittest.TestCase):
             self.assertNotEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
 
 
+class RunComparisonTest(unittest.TestCase):
+    def test_change_during_the_run_exits_five(self):
+        """A file appearing mid-run is an observed change, so exit 5."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            real = support.common.build_manifest
+            calls = {"n": 0}
+
+            def mutating(path):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    # Deterministic mid-run mutation: no host permission games.
+                    (pathlib.Path(path) / "novo.md").write_text("x\n", encoding="utf-8")
+                return real(path)
+
+            with mock.patch.object(support.common, "build_manifest", side_effect=mutating):
+                report = support.audit(root)
+
+            self.assertFalse(report["target_unchanged"])
+            self.assertFalse(report["manifest_diff"]["identical"])
+            self.assertEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
+            finding = support.findings(report, "SQA-026")[0]
+            self.assertIn("durante a auditoria", finding["evidence"])
+
+
 class ReferenceManifestTest(unittest.TestCase):
     def test_matching_reference_confirms_the_target(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -154,9 +179,11 @@ class ReferenceManifestTest(unittest.TestCase):
             report = support.audit(root, reference_manifest=str(reference))
 
             self.assertFalse(report["matches_reference"])
-            self.assertFalse(report["target_unchanged"])
+            # The target did not move while the audit ran: the run comparison
+            # stays true and exit 5 stays reserved for an observed change.
+            self.assertTrue(report["target_unchanged"])
             self.assertTrue(report["manifest_diff"]["identical"])
-            self.assertEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
+            self.assertEqual(report["exit_code"], support.common.EXIT_FINDINGS)
             finding = support.findings(report, "SQA-026")[0]
             self.assertIn("referência", finding["evidence"])
             self.assertNotIn("durante a auditoria", finding["evidence"])

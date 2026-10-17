@@ -248,7 +248,7 @@ Duas formas contam como citação do vocabulário, não como pendência: o marca
 - severidade padrão: medium
 - o que verifica: A skill afirma isolamento, somente leitura, ausência de rede ou outra garantia forte.
 - como: _check_capability_claims: sinal automático sobre a alegação; o agente confirma ou descarta em SQA-105. Ficam fora da varredura apenas títulos de seção (a alegação está na frase abaixo) e listas de metadados (tags, keywords, category). Documentos gerados e frases que citam testes, manifestos ou checksums continuam na varredura: nomear uma evidência não comprova a alegação.
-- limites: O sinal não decide se a alegação é verdadeira, apenas onde olhar. Uma linha apoiada em manifesto ou teste permanece reported até que o agente confira a evidência. O auditor não executa o alvo: alegações não executadas permanecem reported ou unverifiable.
+- limites: O sinal não decide se a alegação é verdadeira, apenas onde olhar. Uma linha apoiada em manifesto ou teste permanece reported até que o agente confira a evidência. O auditor não executa o alvo: alegações não executadas permanecem reported ou unverifiable. Blocos cercados ficam fora da varredura: são exemplo de texto, não promessa da skill.
 
 ### SQA-026 — O manifesto do alvo mudou entre o início e o fim da auditoria.
 

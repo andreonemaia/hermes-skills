@@ -95,6 +95,27 @@ mantém o achado ou o descarta com justificativa registrada.
 `checks_run` mostra o que rodou e o que não rodou. Um item `not_run` é lacuna de
 cobertura declarada, nunca aprovação.
 
+## Integridade do alvo
+
+Duas perguntas diferentes, dois campos diferentes:
+
+- `target_unchanged` compara o manifesto tirado antes da auditoria com o tirado
+  depois. Responde só isto: o alvo se moveu enquanto a auditoria rodava?
+- `matches_reference` compara o alvo com o manifesto passado em
+  `--check-unchanged`. Responde outra coisa: o alvo ainda é o que era naquela
+  referência?
+
+Os dois campos têm três estados, nunca dois: `true` (verificado), `false`
+(divergência observada) e `null` (inconclusivo, porque algum arquivo não pôde ser
+lido). Conteúdo ilegível nunca vira digest válido: ele aparece em
+`manifest_unreadable`, a comparação fica incompleta e o resultado é
+inconclusivo.
+
+Um alvo pode ficar estável durante a execução e ainda divergir de uma referência
+antiga. Esse caso sai como `target_unchanged: true`, `matches_reference: false`,
+achado SQA-026 crítico e código 1. O código 5 fica reservado para a divergência
+observada durante a própria auditoria.
+
 ## Códigos de saída
 
 | código | quando |
@@ -104,7 +125,7 @@ cobertura declarada, nunca aprovação.
 | 2 | alvo inexistente ou não é diretório |
 | 3 | uso incorreto da linha de comando |
 | 4 | falha ao gravar a saída pedida |
-| 5 | o alvo mudou durante a auditoria |
+| 5 | o alvo mudou durante a auditoria (diferença observada entre os manifestos de antes e depois) |
 
 Os códigos 1 e 5 são resultado da auditoria: o relatório existe e traz o motivo.
 Os códigos 2, 3 e 4 são falha operacional: não há relatório. Uma pipeline que

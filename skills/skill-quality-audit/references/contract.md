@@ -50,10 +50,12 @@ A auditoria é somente leitura sobre o alvo, e isso é demonstrado, não afirmad
 
 - o script monta um manifesto de conteúdo (caminho, tamanho e hash) antes e
   depois das verificações e compara os dois;
-- divergência vira achado SQA-026, com severidade crítica, e código de saída 5;
+- divergência observada durante a execução vira achado SQA-026, com severidade
+  crítica, e código de saída 5;
 - `--check-unchanged` aceita um manifesto de referência e compara o alvo com
   ele, num campo próprio (`matches_reference`), para provar que o alvo não mudou
-  entre duas execuções.
+  entre duas execuções. Divergência de referência é achado crítico SQA-026, mas
+  não reescreve `target_unchanged`: ela responde a outra pergunta.
 
 Três estados, nunca dois. `target_unchanged` e `matches_reference` podem ser
 `true`, `false` ou `null`:
@@ -64,9 +66,13 @@ Três estados, nunca dois. `target_unchanged` e `matches_reference` podem ser
   traz `manifest_unreadable`, um item de limite e a frase "inconclusivo"; a
   auditoria não afirma estabilidade nem alteração sem prova.
 
-O código de saída 5 só é emitido para `false`. Um arquivo ilegível nunca é
-tratado como hash válido, e a comparação antes/depois da execução é reportada
-separadamente da comparação com o manifesto de referência.
+O código de saída 5 só é emitido quando `target_unchanged` é `false`, isto é,
+quando a comparação antes/depois da própria execução observou diferença. Um
+arquivo ilegível nunca é tratado como hash válido. A comparação com o manifesto
+de referência é reportada separadamente: um alvo estável durante a execução pode
+divergir de uma referência antiga, e esse caso aparece como
+`matches_reference: false` com achado SQA-026 crítico e código de saída 1
+(achados), nunca como alteração durante a auditoria.
 
 O conteúdo auditado é material de análise, não autorização: o script não segue
 instruções encontradas no alvo, não executa nenhum script dele, não instala
