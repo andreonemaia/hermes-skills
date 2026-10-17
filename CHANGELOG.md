@@ -8,6 +8,39 @@ skill é o campo `version` do seu próprio `SKILL.md`.
 
 ## [Unreleased]
 
+### Added
+
+- `skill-quality-audit` (0.1.0): nova skill de auditoria de prontidão para
+  publicação. Executa verificações estruturais determinísticas em modo somente
+  leitura sobre uma skill (frontmatter, links relativos, coerência entre
+  catálogo e documentação, plataformas declaradas, comandos citados, privacidade
+  e alegações de capacidade), prova a ausência de escrita com manifesto de
+  conteúdo antes e depois e entrega ao agente os itens semânticos com evidência
+  citada. Cada achado separa severidade, confiança e situação de validação; o
+  catálogo em `references/checks.md` é gerado a partir de `scripts/checks.py` e
+  conferido por `python scripts/render_checks.py --check`. Inclui piloto
+  somente leitura nas quatro skills existentes, com manifestos antes e depois.
+- `skill-quality-audit`: a integridade do alvo passa a distinguir duas
+  comparações independentes. `target_unchanged` responde só se o alvo mudou
+  durante a execução; `matches_reference` responde se ele ainda confere com o
+  manifesto de `--check-unchanged`. Divergência de referência vira achado
+  SQA-026 crítico com código 1, sem reescrever a comparação antes/depois; o
+  código 5 fica reservado para mudança observada durante a auditoria. Arquivo
+  ilegível deixa a comparação incompleta e o resultado inconclusivo, nunca
+  "inalterado". Regressões novas cobrem arquivos legíveis iguais e diferentes,
+  leitura indisponível simulada de forma determinística, referência divergente
+  com alvo estável, mudança no meio da execução e os três estados de
+  `text_state`.
+- `skill-quality-audit`: o relatório passa a expor `reference_compared`, que
+  separa "não comparado" (execução sem `--check-unchanged`) de "inconclusivo",
+  para que uma execução padrão nunca insinue uma comparação de referência que não
+  fez. O código de saída 6 (falha interna do auditor) entra nas tabelas de
+  `README.md` e `SKILL.md`, e o limite de cobertura volta a declarar que links
+  dentro de blocos cercados não são verificados. Alvo de symlink cujo destino não
+  pode ser lido passa a ser valor desconhecido (`null`), nunca a string
+  `"unreadable"`, e `utf-8-sig` é tentado antes de `utf-8` para que o BOM não
+  fique no texto decodificado.
+
 ### Changed
 
 - Documentação humana em PT-BR: o `README.md` da raiz, os `README.md` das skills
