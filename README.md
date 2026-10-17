@@ -62,6 +62,7 @@ hermes-skills/
 | [`comfyui-model-manager`](skills/comfyui-model-manager/) | Inventaria, verifica e baixa arquivos de modelo do ComfyUI a partir de um manifesto SHA-256, e valida workflows estaticamente antes de executá-los. Complementa a skill oficial `comfyui`. | windows | 0.1.0 |
 | [`task-checkpoint-recovery`](skills/task-checkpoint-recovery/) | Persiste e revalida o estado lógico e operacional de uma tarefa longa (objetivo, passos, decisões, bloqueios, próximas ações e um registro das operações com efeito colateral), para que ela possa ser interrompida e retomada sem perder decisões nem repetir trabalho já feito. Complementa as sessões nativas, os checkpoints de arquivo e a compactação de contexto. | windows | 0.1.0 |
 | [`skill-execution-report`](skills/skill-execution-report/) | Reconstrói, a partir do `state.db` e do `.usage.json` do Hermes, **o que realmente aconteceu com cada skill** em uma sessão: qual foi apenas mencionada (`discovered`), qual foi carregada (`loaded`), qual foi invocada mesmo sem resultado observado (`invoked`), qual teve execução comprovada por artefato verificado (`execution_proven`) e qual não tem evidência atribuível (`unverifiable`). Estritamente somente leitura, com classificação conservadora e evidência citada. | windows | 0.1.0 |
+| [`skill-quality-audit`](skills/skill-quality-audit/) | Audita a prontidão de publicação de uma skill: verificações estruturais determinísticas e somente leitura sobre frontmatter, links, catálogo, plataformas, identificação de comandos, privacidade e alegações de capacidade. Separa o que foi executado e observado do que é apenas sinal, e entrega a avaliação semântica ao agente com evidência citada. | windows | 0.1.0 |
 
 ### `independent-code-review`
 
@@ -130,6 +131,26 @@ Rode skill-execution-report na sessão atual e me diga quais skills foram realme
 ```
 
 **Detalhes:** [README da skill](skills/skill-execution-report/README.md)
+
+### `skill-quality-audit`
+
+**Finalidade:** responder "esta skill está pronta para publicar?" com achados
+rastreáveis em vez de impressão geral. O script roda verificações estruturais
+determinísticas em modo **somente leitura** sobre o alvo (frontmatter, links,
+coerência entre catálogo e documentação, plataformas declaradas, comandos
+citados, privacidade e alegações de capacidade), prova que não alterou nada
+comparando um manifesto de conteúdo antes e depois, e entrega ao agente os itens
+que exigem julgamento semântico. Cada achado traz severidade justificada,
+localização, evidência e situação de validação: o que foi observado, o que é
+apenas sinal e o que não pôde ser verificado ficam em categorias separadas.
+
+**Exemplo de pedido:**
+
+```
+Audite a skill task-checkpoint-recovery e me diga o que impede a publicação dela.
+```
+
+**Detalhes:** [README da skill](skills/skill-quality-audit/README.md)
 
 ## Instalando uma skill manualmente
 

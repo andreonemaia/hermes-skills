@@ -8,6 +8,19 @@ skill é o campo `version` do seu próprio `SKILL.md`.
 
 ## [Unreleased]
 
+### Added
+
+- `skill-quality-audit` (0.1.0): nova skill de auditoria de prontidão para
+  publicação. Executa verificações estruturais determinísticas em modo somente
+  leitura sobre uma skill (frontmatter, links relativos, coerência entre
+  catálogo e documentação, plataformas declaradas, comandos citados, privacidade
+  e alegações de capacidade), prova a ausência de escrita com manifesto de
+  conteúdo antes e depois e entrega ao agente os itens semânticos com evidência
+  citada. Cada achado separa severidade, confiança e situação de validação; o
+  catálogo em `references/checks.md` é gerado a partir de `scripts/checks.py` e
+  conferido por `python scripts/render_checks.py --check`. Inclui piloto
+  somente leitura nas quatro skills existentes, com manifestos antes e depois.
+
 ### Changed
 
 - Documentação humana em PT-BR: o `README.md` da raiz, os `README.md` das skills
