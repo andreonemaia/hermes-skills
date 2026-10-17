@@ -132,9 +132,20 @@ class IllustrativePathPairsTest(PairsBase):
         )
         self.assertEqual(support.findings(report, "SQA-017"), [])
 
+    def test_a_broken_link_inside_a_fence_is_not_reported(self):
+        in_fence = self.build("```md\n[doc](references/nao_existe.md)\n```")
+        self.assertEqual(support.findings(in_fence, "SQA-013"), [])
+        in_prose = self.build("veja [doc](references/nao_existe.md)\n")
+        self.assertEqual(len(support.findings(in_prose, "SQA-013")), 1)
+
     def test_declared_limit_matches_the_behaviour(self):
         limits = " ".join(support.audit_skill.REPORT_LIMITS)
+        # Commands and concrete paths inside fences are judged; links inside them
+        # are not. The declared limits must say both, or the report hides a limit
+        # it has (see ``_documentation_lines``).
         self.assertIn("Comandos dentro de blocos cercados são conferidos", limits)
+        self.assertIn("links em blocos cercados não são verificados", limits)
+        self.assertIn("caminhos concretos também", limits)
         self.assertNotIn("caminhos dentro de", limits)
 
 
