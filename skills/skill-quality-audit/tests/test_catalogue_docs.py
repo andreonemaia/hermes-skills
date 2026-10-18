@@ -132,6 +132,15 @@ class GeneratedDocumentTest(unittest.TestCase):
         )
         self.assertIn(f"{semantic} semânticas", text)
 
+    def test_check_mode_reports_an_unreadable_file_without_a_traceback(self):
+        # An unreadable report is a failed comparison, not an auditor crash:
+        # the exit code and the message must say so on their own.
+        with mock.patch.object(
+            pathlib.Path, "read_bytes", side_effect=PermissionError("negado")
+        ):
+            code = support.render_checks.main(["--check"])
+        self.assertEqual(code, 1)
+
     def test_check_mode_compares_bytes_not_normalized_lines(self):
         # A CRLF copy renders the same lines; only a byte comparison catches
         # it, and a checkout with autocrlf must not pass silently.
@@ -161,6 +170,53 @@ class GeneratedDocumentTest(unittest.TestCase):
         with support.working_directory(support.SCRIPTS.parent):
             baseline = support.render_checks.render()
         self.assertEqual(baseline, support.render_checks.render())
+
+
+class DocumentedExampleTest(unittest.TestCase):
+    """Hand-written examples must stay tied to the catalogue they illustrate."""
+
+    def _references(self, name: str) -> str:
+        return (support.SCRIPTS.parent / "references" / name).read_text(encoding="utf-8")
+
+    def test_finding_format_lists_only_catalogue_categories(self):
+        # The table is prose: nothing generates it, so a category renamed in
+        # the catalogue would survive here as a documented value the tool
+        # never emits.
+        text = self._references("finding-format.md")
+        line = next(
+            row for row in text.splitlines() if "categoria da verificação" in row
+        )
+        # Only the values after the colon are categories; the cell also names
+        # the field itself.
+        documented = set(re.findall(r"`([a-z]+)`", line.split("catálogo:", 1)[1]))
+        emitted = {check.category for check in support.checks.CATALOGUE}
+        self.assertEqual(documented - emitted, set())
+
+    def test_examples_cite_real_check_titles(self):
+        # A finding copied from a report carries ``id`` and ``check`` together;
+        # a title that no longer exists in the catalogue makes the example a
+        # description of a tool that does not ship.
+        titles = {check.code: check.title for check in support.checks.CATALOGUE}
+        pattern = re.compile(r'"id": "(SQA-\d{3})",\s*\n\s*"check": "([^"]+)"')
+        for name in ("finding-format.md", "example-report.md"):
+            pairs = pattern.findall(self._references(name))
+            self.assertTrue(pairs, name)
+            for code, title in pairs:
+                self.assertEqual(titles.get(code), title, f"{name}: {code}")
+
+    def test_documented_exit_codes_match_the_constants(self):
+        text = self._references("finding-format.md").split("## Códigos de saída", 1)[1]
+        documented = [int(code) for code in re.findall(r"^\|\s*(\d)\s*\|", text, re.M)]
+        constants = [
+            support.common.EXIT_OK,
+            support.common.EXIT_FINDINGS,
+            support.common.EXIT_TARGET_MISSING,
+            support.common.EXIT_USAGE,
+            support.common.EXIT_OUTPUT,
+            support.common.EXIT_TARGET_CHANGED,
+            support.common.EXIT_INTERNAL,
+        ]
+        self.assertEqual(documented, constants)
 
 
 class FindingFormatTest(unittest.TestCase):

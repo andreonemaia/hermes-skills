@@ -23,7 +23,8 @@ Exit codes (contract, also documented in README.md):
 * 4  the report could not be written;
 * 5  the target changed while the audit was running: the read-only promise
      broke. Divergence against the manifest given with ``--check-unchanged``
-     is not a code 5; it is a critical SQA-026 finding and exits with 1;
+     is not a code 5; it is a critical SQA-026 finding and, at the default
+     ``--fail-on``, exits with 1;
 * 6  the auditor itself failed unexpectedly: no report was produced.
 
 Standard library only.
@@ -269,7 +270,11 @@ class Context:
         return value, state
 
     def text(self, rel: str) -> str | None:
-        """Text of one target file, or ``None`` when it is unreadable/binary."""
+        """Text of one target file, or ``None`` when it is unreadable.
+
+        ``None`` covers every state in :data:`common.UNREADABLE_STATES` as well
+        as a missing entry; use :meth:`text_state` to tell them apart.
+        """
         return self.text_state(rel)[0]
 
     def docs(self) -> list[tuple[str, str]]:

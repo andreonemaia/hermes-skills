@@ -303,9 +303,17 @@ def now_ts() -> float:
     raw = os.environ.get("SQA_NOW")
     if raw:
         try:
-            return float(raw)
+            value = float(raw)
         except ValueError as exc:
             raise UsageError(f"SQA_NOW inválido: {raw!r}") from exc
+        # ``float`` also accepts ``nan``/``inf``/``1e30``, which ``fromtimestamp``
+        # then rejects with an uncaught error: refuse them here, where the
+        # message can still name the override.
+        try:
+            datetime.datetime.fromtimestamp(value, datetime.timezone.utc)
+        except (OverflowError, OSError, ValueError) as exc:
+            raise UsageError(f"SQA_NOW fora do intervalo suportado: {raw!r}") from exc
+        return value
     return datetime.datetime.now(datetime.timezone.utc).timestamp()
 
 
@@ -1146,7 +1154,14 @@ def _split_flow_items(value: str) -> tuple[list[str], bool]:
                 # Trailing content after the list: not the restricted grammar.
                 return items, False
             items.append("".join(current).strip())
-            return [item for item in items if item], True
+            if items and items[-1] == "":
+                # ``[a, b,]``: YAML allows one trailing comma.
+                items.pop()
+            if any(item == "" for item in items):
+                # ``[a, , b]``: an empty item is not data. Recording it as
+                # malformed keeps the list from silently losing a slot.
+                return items, False
+            return items, True
         current.append(char)
     return items, False
 
