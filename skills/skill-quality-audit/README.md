@@ -106,12 +106,20 @@ Duas perguntas diferentes, dois campos diferentes:
   referência?
 
 Os dois campos têm três estados, nunca dois: `true` (verificado), `false`
-(divergência observada) e `null` (inconclusivo, porque algum arquivo não pôde ser
-lido). Conteúdo ilegível nunca vira digest válido: ele aparece em
-`manifest_unreadable`, a comparação fica incompleta e o resultado é
-inconclusivo. O campo `reference_compared` diz se a comparação chegou a
-acontecer: sem `--check-unchanged` ele é `false` e `matches_reference` é `null`,
-que é "não comparado", não uma afirmação de igualdade.
+(divergência observada) e `null` (inconclusivo). A mesma regra vale para
+`manifest_diff` e `reference_diff`, porque as duas comparações usam o mesmo
+código: **ausência só prova adição ou remoção quando aquele lado foi
+efetivamente observado**. Uma entrada que só um dos manifestos tem, fora da área
+ilegível, continua provando divergência. Uma entrada que falta porque a
+subárvore não pôde ser listada vai para `unconfirmed_added` ou
+`unconfirmed_removed`, nunca para `added`/`removed`, e deixa o resultado
+inconclusivo. `holes_before` e `holes_after` nomeiam as subárvores não
+observadas em cada lado, incluindo `.` quando a própria raiz falhou. Conteúdo
+ilegível nunca vira digest válido: ele aparece em `manifest_unreadable`, a
+comparação fica incompleta e o resultado é inconclusivo. O campo
+`reference_compared` diz se a comparação chegou a acontecer: sem
+`--check-unchanged` ele é `false` e `matches_reference` é `null`, que é "não
+comparado", não uma afirmação de igualdade.
 
 Um alvo pode ficar estável durante a execução e ainda divergir de uma referência
 antiga. Esse caso sai como `target_unchanged: true`, `matches_reference: false`,
@@ -166,10 +174,24 @@ Limites que valem para toda a versão:
 - nomes de repositório ou serviço privado sem formato reconhecível não são
   detectados automaticamente e ficam para a avaliação semântica.
 
-## Privacidade
+## Exportação e privacidade
 
 Os achados SQA-019 a SQA-022 informam localização, classe e comprimento. O valor
-nunca é reproduzido, então o relatório pode ser anexado a um PR ou a um ticket.
+nunca é reproduzido.
+
+O relatório (`audit`, JSON e Markdown) é mascarado na exportação, mas o
+mascaramento é **limitado por formato**: só as classes reconhecidas são
+substituídas, e texto livre, nomes privados sem formato e caminhos relativos do
+alvo permanecem como estão. Por isso `publication.report_safe_to_attach` é
+`false`: o relatório exige revisão antes de ser anexado a PR, issue ou chat. O
+bloco `publication` viaja no próprio relatório para que o artefato declare seu
+status em vez de depender de prosa externa.
+
+O manifesto escrito por `manifest --out` é técnico e não mascarado, para que a
+comparação de integridade seja exata. Ele é privado e não deve ser publicado:
+`publication.manifest_private` registra isso. Use-o apenas como entrada de
+`--check-unchanged`.
+
 A detecção é por formato fixo; ela não determina se o valor é real, se a
 credencial está ativa, se o endereço pertence a uma pessoa real ou se um nome
 privado é sensível sem formato próprio.

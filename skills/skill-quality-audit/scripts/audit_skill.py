@@ -1618,6 +1618,51 @@ def _integrity_finding(detail: str, diff: dict, validation: str = "executed"):
     )
 
 
+def _reference_gap_reason(diff: dict) -> str:
+    """Why a reference comparison could not confirm the target.
+
+    Names the side that lost access, because the gap is evidence only for that
+    side: a reference generated over a hole cannot witness an addition, and a
+    target read over a hole cannot witness a removal.
+    """
+    parts: list[str] = []
+    if diff["holes_before"]:
+        parts.append(
+            "o manifesto de referência foi gerado com travessia incompleta em "
+            f"diretório(s) ({_traversal_summary([{'rel': rel} for rel in diff['holes_before']])})"
+        )
+    if diff["holes_after"]:
+        parts.append(
+            "a travessia do alvo falhou em diretório(s) "
+            f"({_traversal_summary([{'rel': rel} for rel in diff['holes_after']])})"
+        )
+    if diff["unconfirmed_added"]:
+        parts.append(
+            f"{len(diff['unconfirmed_added'])} entrada(s) do alvo em área que a referência não observou"
+        )
+    if diff["unconfirmed_removed"]:
+        parts.append(
+            f"{len(diff['unconfirmed_removed'])} entrada(s) da referência em área que o alvo não observou"
+        )
+    if diff["unverifiable"]:
+        parts.append(f"{len(diff['unverifiable'])} arquivo(s) sem conteúdo legível")
+    return "o manifesto de referência não pôde ser confirmado: " + "; ".join(parts)
+
+
+def _reference_gap_recommendation(diff: dict) -> str:
+    """What to fix so the comparison can conclude, named per actual gap."""
+    directories = bool(diff["holes_before"] or diff["holes_after"])
+    files = bool(diff["unverifiable"])
+    if directories and files:
+        return (
+            "garantir permissão de leitura nos diretórios e arquivos listados e "
+            "repetir a comparação"
+        )
+    if files:
+        return "garantir permissão de leitura nos arquivos listados e repetir a comparação"
+    return "garantir permissão de leitura nos diretórios listados e repetir a comparação"
+
+
 def audit_target(
     target: str,
     backend: str = "auto",
@@ -1645,23 +1690,16 @@ def audit_target(
     # claims a comparison it did not make.
     reference_ok: bool | None = None
     reference_compared = reference_manifest is not None
+    reference_diff: dict | None = None
 
     if reference_manifest:
         reference = common.load_manifest(reference_manifest)
         diff = common.diff_manifests(reference, manifest_before)
-        holes = [str(item.get("rel") or "") for item in diff["walk_errors"]]
-        unknown_hole = any(not rel or rel == common.UNKNOWN_PATH for rel in holes)
-        # A removed entry may simply be inside a subtree that could not be
-        # listed, so it is only a proven divergence when no hole explains it.
-        unexplained_removed = [
-            rel
-            for rel in diff["removed"]
-            if not unknown_hole
-            and not any(rel == hole or rel.startswith(hole + "/") for hole in holes)
-        ]
-        if diff["changed"] or diff["added"] or unexplained_removed:
-            # Read entries that differ, or entries only the target has, are a
-            # divergence even when another subtree could not be listed.
+        reference_diff = diff
+        if common.proven_change(diff):
+            # Entries read on both sides that differ, or entries whose absence
+            # the observing side actually witnessed, are a divergence even when
+            # another subtree could not be listed.
             reference_ok = False
             findings.append(
                 _integrity_finding(
@@ -1671,42 +1709,19 @@ def audit_target(
                     diff,
                 )
             )
-        elif diff["walk_errors"]:
-            # A subtree that could not be listed makes the comparison
-            # inconclusive: the entries that are missing may be missing from the
-            # traversal, not from the target.
-            reference_ok = None
-            limits.append(
-                common.limit(
-                    INTEGRITY_CODE,
-                    file=".",
-                    line=None,
-                    reason=(
-                        "o manifesto de referência não pôde ser confirmado: a travessia do "
-                        f"alvo falhou em diretório(s) {_traversal_summary(diff['walk_errors'])}"
-                    ),
-                    recommendation=(
-                        "garantir permissão de leitura nos diretórios listados e repetir a comparação"
-                    ),
-                )
-            )
-        elif diff["identical"] and diff["complete"]:
+        elif diff["proven_same"]:
             reference_ok = True
         else:
-            # Same comparable entries, but some content could not be hashed.
+            # Every remaining difference is explained by a gap on the side that
+            # lacks the entry, so neither addition nor removal is proven.
             reference_ok = None
             limits.append(
                 common.limit(
                     INTEGRITY_CODE,
                     file=".",
                     line=None,
-                    reason=(
-                        "o manifesto de referência não pôde ser confirmado: "
-                        f"{len(diff['unverifiable'])} arquivo(s) sem conteúdo legível"
-                    ),
-                    recommendation=(
-                        "garantir leitura de todos os arquivos do alvo e repetir a comparação"
-                    ),
+                    reason=_reference_gap_reason(diff),
+                    recommendation=_reference_gap_recommendation(diff),
                 )
             )
 
@@ -1733,24 +1748,46 @@ def audit_target(
         + list(manifest_after.get("walk_errors") or [])
     )
     # Three states: True (verified stable), False (verified change), None
-    # (coverage incomplete, so stability cannot be claimed). A traversal hole is
-    # enough on its own: content that was never listed was never compared.
-    if not run_diff["identical"]:
+    # (coverage incomplete, so stability cannot be claimed). ``proven_same`` is
+    # the shared rule: an entry missing from one pass is a change only when that
+    # pass actually listed the directory that should hold it.
+    proven_change = common.proven_change(run_diff)
+    if proven_change:
         unchanged: bool | None = False
-    elif run_diff["unverifiable"] or traversal:
-        unchanged = None
-    else:
+    elif run_diff["proven_same"]:
         unchanged = True
+    else:
+        unchanged = None
     # ``target_unchanged`` answers one question only: did the target move while
     # this audit was running? Divergence from a reference manifest is a separate
     # fact and never rewrites this field.
-    if not run_diff["identical"]:
+    if proven_change:
         findings.append(
             _integrity_finding(
                 "o manifesto do alvo mudou durante a auditoria: "
                 f"{len(run_diff['changed'])} alterado(s), {len(run_diff['added'])} adicionado(s), "
                 f"{len(run_diff['removed'])} removido(s)",
                 run_diff,
+            )
+        )
+    if run_diff["unconfirmed_added"] or run_diff["unconfirmed_removed"]:
+        # The entry exists in one pass and not the other, but the pass that
+        # lacks it never listed the directory: the absence is a gap in the
+        # observation, not evidence of a change.
+        limits.append(
+            common.limit(
+                INTEGRITY_CODE,
+                file=".",
+                line=None,
+                reason=(
+                    "a estabilidade do alvo não pôde ser comprovada: "
+                    f"{len(run_diff['unconfirmed_added'])} entrada(s) só aparecem no segundo "
+                    f"manifesto e {len(run_diff['unconfirmed_removed'])} só no primeiro, em "
+                    "subárvore que um dos passes não conseguiu listar"
+                ),
+                recommendation=(
+                    "garantir permissão de leitura nos diretórios listados e repetir a auditoria"
+                ),
             )
         )
     if run_diff["unverifiable"]:
@@ -1789,22 +1826,27 @@ def audit_target(
                 ),
             )
         )
-    if run_diff["identical"] and not run_diff["unverifiable"] and not traversal:
+    if proven_change:
+        integrity_reason = "manifesto divergente: alvo alterado durante a auditoria"
+    elif run_diff["proven_same"]:
         integrity_reason = (
             f"manifesto idêntico antes e depois ({manifest_after['file_count']} arquivos)"
         )
-    elif run_diff["identical"]:
-        integrity_reason = (
-            "manifesto idêntico nos arquivos comparáveis; "
-            f"{len(run_diff['unverifiable'])} arquivo(s) sem conteúdo legível"
-        )
+    else:
+        bits: list[str] = []
+        if run_diff["unverifiable"]:
+            bits.append(f"{len(run_diff['unverifiable'])} arquivo(s) sem conteúdo legível")
+        unconfirmed = len(run_diff["unconfirmed_added"]) + len(run_diff["unconfirmed_removed"])
+        if unconfirmed:
+            bits.append(
+                f"{unconfirmed} entrada(s) ausente(s) em subárvore que um dos passes não listou"
+            )
         if traversal:
-            integrity_reason += (
-                "; travessia incompleta em "
+            bits.append(
+                "travessia incompleta em "
                 f"{len({item['rel'] for item in traversal})} diretório(s)"
             )
-    else:
-        integrity_reason = "manifesto divergente: alvo alterado durante a auditoria"
+        integrity_reason = "manifesto idêntico nos arquivos comparáveis; " + "; ".join(bits)
     if reference_ok is False:
         integrity_reason += (
             "; o manifesto de referência difere do estado atual: divergência de "
@@ -1813,7 +1855,8 @@ def audit_target(
     elif reference_compared and reference_ok is None:
         integrity_reason += (
             "; o manifesto de referência não pôde ser confirmado: cobertura "
-            "insuficiente (conteúdo ilegível ou travessia incompleta)"
+            "insuficiente (conteúdo ilegível, travessia incompleta ou entrada "
+            "ausente em área não observada)"
         )
     checks_run.append(
         {
@@ -1878,6 +1921,7 @@ def audit_target(
         },
         "manifest_after_digest": manifest_after["digest"],
         "manifest_diff": run_diff,
+        "reference_diff": reference_diff,
         "manifest_unreadable": manifest_after.get("unreadable", []),
         "matches_reference": reference_ok,
         "reference_compared": reference_compared,

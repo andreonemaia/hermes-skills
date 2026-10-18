@@ -97,10 +97,20 @@ during the run and still differ from an older reference; that is a reference
 divergence (critical SQA-026, exit 1), not a change observed during the audit
 (exit 5). When a file cannot be read, both comparisons stay inconclusive
 (`null`, with `manifest_unreadable` naming it) instead of claiming "unchanged".
-A divergence that was actually read (different content, or an entry only one
-side has) still reports `false` even if another subtree could not be listed;
-a hole only makes an otherwise clean comparison inconclusive, because a missing
-entry inside it may be a traversal gap rather than a removal.
+
+The manifest is a **private technical artifact**: it is deliberately not masked,
+so two manifests compare exactly. Do not attach it to a PR, an issue or a chat;
+`publication.manifest_private` in the report states this.
+
+Both comparisons use the same rule, and it is per side: an absence proves an
+addition or a removal only when that side was actually observed. A divergence
+that was read (different content, or an entry only one side has outside the
+unreadable area) still reports `false` even if another subtree could not be
+listed. An entry missing because its subtree could not be listed goes to
+`unconfirmed_added` or `unconfirmed_removed`, never to `added`/`removed`, and
+makes an otherwise clean comparison inconclusive. `holes_before` and
+`holes_after` name the subtrees that were not observed on each side, including
+`.` when the root itself failed.
 `reference_compared` says whether the comparison happened at all: without
 `--check-unchanged` it is `false` and `matches_reference` is `null`, meaning "not
 compared", never "equal".
@@ -178,7 +188,10 @@ semantic items, and they stay with you.
 ## Privacy Findings
 
 SQA-019 to SQA-022 report a location, a class and a length. The value is never
-reproduced, so the report is safe to attach to a PR or a ticket.
+reproduced. The report is masked on export, but masking is **format-limited**:
+only recognised classes are replaced, so free-form text, private names without a
+format and target-relative paths survive. `publication.report_safe_to_attach` is
+`false`: review the report before attaching it to a PR, an issue or a chat.
 
 Detection is by fixed format: credential assignments, AWS keys, GitHub tokens,
 `sk-` style keys, Slack tokens, Google keys, JWTs, `Bearer` values and private

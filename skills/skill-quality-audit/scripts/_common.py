@@ -659,6 +659,52 @@ def unreadable_entries(entries: dict) -> list[str]:
     )
 
 
+def normalize_hole(value: object) -> str:
+    """Canonical form of a hole path, so prefix matching cannot be fooled.
+
+    Manifests can be written by hand or by an older version, and ``privado/``
+    would otherwise produce the prefix ``privado//`` and stop covering the
+    entries below it. A failure that cannot name its directory becomes
+    ``UNKNOWN_PATH``; anything that names no directory at all becomes ``"."``,
+    because an unnamed failure leaves the whole tree unobserved.
+    """
+    rel = str(value or "").strip().replace("\\", "/")
+    if rel == UNKNOWN_PATH:
+        return UNKNOWN_PATH
+    while rel.startswith("./"):
+        rel = rel[2:]
+    rel = rel.rstrip("/")
+    return rel or "."
+
+
+def hole_paths(manifest: dict) -> list[str]:
+    """Directories whose listing failed in one manifest, as relative paths.
+
+    ``"."`` is the target root itself and ``UNKNOWN_PATH`` a failure whose
+    location could not be named: both leave the whole tree unobserved. Every
+    other hole leaves only the entries below it unobserved.
+    """
+    return [normalize_hole(item.get("rel")) for item in manifest.get("walk_errors") or []]
+
+
+def hole_covers(holes: list[str], rel: str) -> bool:
+    """Whether a traversal hole explains the absence of ``rel``.
+
+    An entry missing from a manifest is only evidence that it is missing from
+    the *tree* when the directory that should have listed it was actually read.
+    A hole on the side that lacks the entry means the entry may simply not have
+    been seen, so absence there proves nothing.
+    """
+    rel = normalize_hole(rel)
+    for hole in holes:
+        hole = normalize_hole(hole)
+        if hole in (".", UNKNOWN_PATH):
+            return True
+        if rel == hole or rel.startswith(hole + "/"):
+            return True
+    return False
+
+
 def diff_manifests(before: dict, after: dict) -> dict:
     """Added, removed, changed and *unverifiable* entries between two manifests.
 
@@ -666,13 +712,30 @@ def diff_manifests(before: dict, after: dict) -> dict:
     lands in ``unverifiable`` and makes ``complete`` false. A traversal hole on
     either side does the same: the two manifests may agree only because both
     stopped at the same locked door, which is not evidence of stability.
-    ``identical`` only speaks about the entries that could be compared, so
-    callers must consult ``complete`` before claiming the target stayed the
-    same.
+
+    Absence is judged per side, because each side is the only witness for its
+    own gaps. An entry present in ``after`` and absent from ``before`` is a
+    proven addition only when ``before`` actually listed the directory that
+    would hold it; otherwise it lands in ``unconfirmed_added``. Symmetrically,
+    an entry present in ``before`` and absent from ``after`` is a proven removal
+    only when ``after`` observed that directory; otherwise it lands in
+    ``unconfirmed_removed``. ``identical`` only speaks about the entries that
+    could be compared, and ``proven_same`` is the single flag both the
+    reference comparison and the run comparison read before claiming agreement.
     """
     old, new = before.get("entries", {}), after.get("entries", {})
-    added = sorted(set(new) - set(old))
-    removed = sorted(set(old) - set(new))
+    holes_before = hole_paths(before)
+    holes_after = hole_paths(after)
+    added: list[str] = []
+    unconfirmed_added: list[str] = []
+    for rel in sorted(set(new) - set(old)):
+        target = unconfirmed_added if hole_covers(holes_before, rel) else added
+        target.append(rel)
+    removed: list[str] = []
+    unconfirmed_removed: list[str] = []
+    for rel in sorted(set(old) - set(new)):
+        target = unconfirmed_removed if hole_covers(holes_after, rel) else removed
+        target.append(rel)
     unreadable = set(unreadable_entries(old)) | set(unreadable_entries(new))
     # The same hole seen on both passes is one hole, not two: a reader counting
     # entries must not conclude the target is worse than it is. Identity is the
@@ -695,13 +758,41 @@ def diff_manifests(before: dict, after: dict) -> dict:
         "added": added,
         "removed": removed,
         "changed": changed,
+        "unconfirmed_added": unconfirmed_added,
+        "unconfirmed_removed": unconfirmed_removed,
         "unverifiable": sorted(unreadable),
         "walk_errors": walk_errors,
+        "holes_before": sorted(set(holes_before)),
+        "holes_after": sorted(set(holes_after)),
         "identical": not (added or removed or changed),
-        "complete": not unreadable and not walk_errors and not (added or removed),
+        # Agreement that covers the whole tree: no proven difference, no entry
+        # whose absence a hole could explain, and no content left unhashed.
+        "proven_same": not (
+            added
+            or removed
+            or changed
+            or unconfirmed_added
+            or unconfirmed_removed
+            or unreadable
+            or walk_errors
+        ),
+        "complete": not unreadable
+        and not walk_errors
+        and not (added or removed or unconfirmed_added or unconfirmed_removed),
         "digest_before": before.get("digest"),
         "digest_after": after.get("digest"),
     }
+
+
+def proven_change(diff: dict) -> bool:
+    """Whether a manifest comparison observed a difference it can prove.
+
+    Only entries read on both sides (``changed``) or entries whose absence the
+    observing side actually witnessed (``added``/``removed``) count. Both the
+    reference comparison and the run comparison ask this one function, so the
+    two paths cannot disagree about what a proven change is.
+    """
+    return bool(diff.get("changed") or diff.get("added") or diff.get("removed"))
 
 
 def load_manifest(path: str) -> dict:
@@ -1151,6 +1242,28 @@ def _mask_entry_map(entries: dict) -> dict:
     return out
 
 
+def _mask_diff(diff: dict) -> dict:
+    """Redact the paths of a manifest comparison.
+
+    Shared by the reference comparison and the run comparison: both carry the
+    same path lists, and masking only one would leak the other.
+    """
+    out = dict(diff)
+    for key in (
+        "added",
+        "removed",
+        "changed",
+        "unconfirmed_added",
+        "unconfirmed_removed",
+        "unverifiable",
+        "holes_before",
+        "holes_after",
+    ):
+        out[key] = [redact(str(item)) for item in out.get(key) or []]
+    out["walk_errors"] = _mask_text(out.get("walk_errors") or [])
+    return out
+
+
 def publishable(report: dict) -> dict:
     """Copy of ``report`` with every target-derived string masked.
 
@@ -1189,11 +1302,10 @@ def publishable(report: dict) -> dict:
         out["manifest"] = manifest
     diff = out.get("manifest_diff")
     if isinstance(diff, dict):
-        diff = dict(diff)
-        for key in ("added", "removed", "changed", "unverifiable"):
-            diff[key] = [redact(str(item)) for item in diff.get(key) or []]
-        diff["walk_errors"] = _mask_text(diff.get("walk_errors") or [])
-        out["manifest_diff"] = diff
+        out["manifest_diff"] = _mask_diff(diff)
+    reference_diff = out.get("reference_diff")
+    if isinstance(reference_diff, dict):
+        out["reference_diff"] = _mask_diff(reference_diff)
     for section in MASKED_RECORDS:
         if isinstance(out.get(section), list):
             out[section] = [_mask_text(item) for item in out[section]]

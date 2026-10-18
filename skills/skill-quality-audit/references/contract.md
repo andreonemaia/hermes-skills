@@ -65,15 +65,26 @@ Três estados, nunca dois. `target_unchanged` e `matches_reference` podem ser
 `true`, `false` ou `null`:
 
 - `true`: todos os arquivos foram lidos e os hashes coincidem;
-- `false`: houve diferença observada, com evidência no `manifest_diff`;
+- `false`: houve diferença observada, com evidência em `manifest_diff` ou
+  `reference_diff`;
 - `null`: o conteúdo de algum arquivo não pôde ser lido, ou uma subárvore não
   pôde ser listada. Nesse caso o relatório traz `manifest_unreadable` e/ou
   `walk_errors`, um item de limite e a frase "inconclusivo"; a auditoria não
-  afirma estabilidade nem alteração sem prova. Diferença já observada em
-  arquivos lidos vence o buraco: um conteúdo alterado, ou uma entrada que só um
-  dos lados tem fora da subárvore ilegível, continua sendo `false`. Uma remoção
-  dentro da subárvore não listada não prova nada, porque a entrada pode ter
-  ficado de fora da travessia.
+  afirma estabilidade nem alteração sem prova.
+
+A comparação é feita por lado e usa uma regra única para execução e referência:
+**ausência só prova adição ou remoção quando aquele lado foi efetivamente
+observado**. Diferença já observada em arquivos lidos vence o buraco: um conteúdo
+alterado, ou uma entrada que só um dos lados tem fora da subárvore ilegível,
+continua sendo `false`. Uma entrada ausente porque a subárvore não pôde ser
+listada vai para `unconfirmed_added` ou `unconfirmed_removed`, nunca para
+`added`/`removed`, e torna o resultado inconclusivo em vez de afirmar remoção ou
+adição. `holes_before` e `holes_after` nomeiam as subárvores não observadas de
+cada lado, incluindo `.` quando a falha atinge a raiz; `proven_same` indica se a
+comparação dos hashes comuns foi completa. `identical` responde a uma pergunta
+menor: diz apenas que nenhuma diferença foi comprovada entre as entradas
+comparadas, e por isso pode ser `true` com `complete: false`. Quem decide se a
+comparação concluiu é `proven_same`, não `identical`.
 
 O código de saída 5 só é emitido quando `target_unchanged` é `false`, isto é,
 quando a comparação antes/depois da própria execução observou diferença. Um
@@ -120,6 +131,24 @@ skill não executa testes do alvo e declara isso como limite.
   de faixa em texto explicativo.
 - Nomes de repositório ou serviço privado sem formato reconhecível não são
   detectáveis por padrão e ficam para a avaliação semântica (SQA-103, SQA-105).
+
+## Exportação
+
+Dois artefatos saem do auditor, e eles não são o mesmo tipo de arquivo:
+
+- o **relatório** (`audit`, JSON e Markdown) é o artefato feito para circular.
+  Todos os campos lidos do alvo são mascarados na exportação, mas o mascaramento
+  é limitado por formato: só as classes de `PRIVACY_PATTERNS` são reconhecidas.
+  Texto livre, nomes privados sem formato e caminhos relativos do alvo
+  permanecem. Por isso `publication.report_safe_to_attach` é `false`: o
+  relatório exige revisão antes de ser anexado a PR, issue ou chat;
+- o **manifesto** (`manifest --out`) é técnico e não mascarado, para que a
+  comparação de integridade seja exata. Ele é privado e não é publicável:
+  `publication.manifest_raw` e `publication.manifest_private` registram isso.
+  Use-o apenas como entrada de `--check-unchanged`.
+
+O bloco `publication` acompanha o relatório para que o artefato declare seu
+próprio status, em vez de depender de documentação externa.
 
 ## Formato mínimo de achado
 

@@ -8,9 +8,8 @@ aparecem com classe e comprimento, como o scanner os emite.
 ## Comando
 
 ```bash
-python scripts/audit_skill.py manifest --target ../alvo --out before.json
 python scripts/audit_skill.py audit --target ../alvo \
-  --format json --out report.json --check-unchanged before.json
+  --format json --out report.json
 ```
 
 ## Resultado
@@ -22,17 +21,25 @@ python scripts/audit_skill.py audit --target ../alvo \
   "frontmatter_backend": "pyyaml",
   "target_unchanged": true,
   "matches_reference": null,
+  "reference_compared": false,
   "manifest_unreadable": [],
   "manifest_diff": {
     "identical": true,
+    "proven_same": true,
     "complete": true,
     "added": [],
     "changed": [],
     "removed": [],
+    "unconfirmed_added": [],
+    "unconfirmed_removed": [],
     "unverifiable": [],
+    "walk_errors": [],
+    "holes_before": [],
+    "holes_after": [],
     "digest_before": "<sha256 do manifesto inicial>",
     "digest_after": "<sha256 do manifesto final>"
   },
+  "reference_diff": null,
   "coverage": {
     "entry_count": 14,
     "skipped": [],
@@ -44,6 +51,13 @@ python scripts/audit_skill.py audit --target ../alvo \
       "scripts/checkpoint.py",
       "tests/test_hardening.py"
     ]
+  },
+  "publication": {
+    "report_masked": true,
+    "report_safe_to_attach": false,
+    "report_limit": "campos lidos do alvo são mascarados no JSON e no Markdown, mas apenas para formatos reconhecidos (credencial, e-mail, URL, host, IP, caminho pessoal); texto livre, nomes privados sem formato e caminhos relativos do alvo permanecem como estão, então o relatório exige revisão antes de ser publicado",
+    "manifest_raw": true,
+    "manifest_private": "o manifesto escrito por 'manifest --out' é técnico e não mascarado, para que a comparação de integridade seja exata; não é publicável"
   },
   "summary": {
     "total": 7,
@@ -105,7 +119,13 @@ python scripts/audit_skill.py audit --target ../alvo \
 - `matches_reference` é `null` porque esta execução não usou
   `--check-unchanged`: "não comparado" não é "igual". `unverifiable` lista
   arquivos cujo conteúdo não pôde ser lido; quando não está vazio,
-  `target_unchanged` fica `null` (inconclusivo), nunca `true`.
+  `target_unchanged` fica `null` (inconclusivo), nunca `true`. O mesmo vale para
+  `holes_before`/`holes_after`: ausência de uma entrada só prova adição ou
+  remoção do lado que foi observado, e o que fica sob uma subárvore ilegível vai
+  para `unconfirmed_added`/`unconfirmed_removed`.
+- `publication.report_safe_to_attach` é `false`: o relatório é mascarado, mas só
+  para formatos reconhecidos, então exige revisão antes de ser publicado. O
+  manifesto usado em `--check-unchanged` é técnico, não mascarado e privado.
 - O achado `SQA-019` é `signal` porque o arquivo está em `tests/`, mas a
   severidade continua `critical`: o caminho muda a confiança, não o impacto. Ele
   só fecha depois que uma pessoa confirma se o valor é sintético.

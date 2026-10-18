@@ -441,28 +441,155 @@ class TraversalFailureTest(unittest.TestCase):
             report = support.audit(self.root, reference_manifest=reference)
         self.assertIs(report["matches_reference"], False)
 
-    def test_a_hole_only_in_the_second_pass_still_makes_the_copy_incomplete(self):
-        # The published manifest copy lists the union of both passes, so its
-        # ``complete`` flag has to be the conjunction of both as well.
+    def _controlled_builds(self, second_pass):
+        """Patch ``build_manifest`` so only the second construction is altered.
+
+        Counting ``os.scandir`` calls does not identify a pass: the Context
+        reads the tree too, so the counter can trip before the first manifest
+        is finished and leave both passes incomplete. Wrapping the manifest
+        builder states which construction fails, which is the fact under test.
+        """
+        real_build = common.build_manifest
+        calls = {"count": 0}
+
+        def controlled(root):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                return second_pass(real_build, root)
+            return real_build(root)
+
+        return controlled, calls
+
+    def test_a_hole_only_in_the_second_pass_is_inconclusive(self):
+        # The first manifest completes over the whole tree; only the second
+        # loses access. The entry that disappears is then explained by the
+        # hole, so it is not a proven removal.
+        def second_pass(real_build, root):
+            with mock.patch("os.scandir", self._failing_scandir("privado")):
+                return real_build(root)
+
+        controlled, calls = self._controlled_builds(second_pass)
+        with mock.patch.object(common, "build_manifest", controlled):
+            report = support.audit(self.root)
+        self.assertEqual(calls["count"], 2)
+        diff = report["manifest_diff"]
+        self.assertEqual(diff["removed"], [])
+        self.assertEqual(diff["unconfirmed_removed"], ["references/privado/segredo.md"])
+        self.assertIsNone(report["target_unchanged"])
+        self.assertNotIn("SQA-026", support.codes(report))
+        # Not merely "different from 5": the fixture has no finding, so an
+        # inconclusive run must stay a clean exit rather than borrow a code.
+        self.assertEqual(report["exit_code"], support.common.EXIT_OK)
+        self.assertFalse(report["manifest"]["complete"])
+        reasons = [item["reason"] for item in report["limits"]]
+        self.assertTrue(
+            any("não pôde ser comprovada" in reason for reason in reasons), reasons
+        )
+
+    def test_a_real_addition_beside_the_second_pass_hole_still_exits_five(self):
+        # Control for the previous test: the hole hides one entry, but a file
+        # created outside it between the two passes is still observed as a new
+        # entry and remains a proven change.
+        def second_pass(real_build, root):
+            (pathlib.Path(root) / "extra.md").write_text("# novo\n", encoding="utf-8")
+            with mock.patch("os.scandir", self._failing_scandir("privado")):
+                return real_build(root)
+
+        controlled, _ = self._controlled_builds(second_pass)
+        with mock.patch.object(common, "build_manifest", controlled):
+            report = support.audit(self.root)
+        self.assertEqual(report["manifest_diff"]["added"], ["extra.md"])
+        self.assertIs(report["target_unchanged"], False)
+        self.assertIn("SQA-026", support.codes(report))
+        self.assertEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
+
+    def test_a_root_failure_in_the_second_pass_is_inconclusive(self):
+        # A failure on ``.`` leaves every entry unobserved on that side; the
+        # entries missing from the second manifest prove nothing.
+        root_abs = pathlib.Path(self.root).resolve()
         real = os.scandir
-        seen = {"privado": 0}
 
         def fake(path="."):
-            if pathlib.Path(str(path)).name == "privado":
-                seen["privado"] += 1
-                if seen["privado"] > 1:
-                    raise PermissionError(13, "simulado", str(path))
+            if pathlib.Path(str(path)).resolve() == root_abs:
+                raise PermissionError(13, "simulado", str(path))
+            return real(path)
+
+        def second_pass(real_build, root):
+            with mock.patch("os.scandir", fake):
+                return real_build(root)
+
+        controlled, _ = self._controlled_builds(second_pass)
+        with mock.patch.object(common, "build_manifest", controlled):
+            report = support.audit(self.root)
+        self.assertEqual(report["manifest"]["walk_errors"][0]["rel"], ".")
+        self.assertEqual(report["manifest_diff"]["removed"], [])
+        self.assertTrue(report["manifest_diff"]["unconfirmed_removed"])
+        self.assertIsNone(report["target_unchanged"])
+        self.assertNotIn("SQA-026", support.codes(report))
+
+    def test_a_reference_built_over_a_hole_cannot_prove_an_addition(self):
+        # The reference never listed ``privado``; the target does. The file is
+        # not an addition, it was simply absent from the incomplete reference.
+        reference = self._tmp.name + "-hole.json"
+        with mock.patch("os.scandir", self._failing_scandir("privado")):
+            manifest = common.build_manifest(str(self.root))
+        pathlib.Path(reference).write_text(
+            common.render_json(manifest, mask=False), encoding="utf-8"
+        )
+        self.addCleanup(pathlib.Path(reference).unlink)
+        report = support.audit(self.root, reference_manifest=reference)
+        diff = report["reference_diff"]
+        self.assertEqual(diff["added"], [])
+        self.assertEqual(diff["unconfirmed_added"], ["references/privado/segredo.md"])
+        self.assertIsNone(report["matches_reference"])
+        reasons = [item["reason"] for item in report["limits"]]
+        self.assertTrue(
+            any("referência não observou" in reason for reason in reasons), reasons
+        )
+        self.assertFalse(
+            any("adicionado(s)" in reason for reason in reasons), reasons
+        )
+
+    def test_a_real_addition_beside_the_reference_hole_is_still_a_divergence(self):
+        # Control: the reference hole hides ``privado``, but a file created in
+        # the target outside it was observed by the reference and is a proven
+        # addition.
+        reference = self._tmp.name + "-hole-control.json"
+        with mock.patch("os.scandir", self._failing_scandir("privado")):
+            manifest = common.build_manifest(str(self.root))
+        pathlib.Path(reference).write_text(
+            common.render_json(manifest, mask=False), encoding="utf-8"
+        )
+        self.addCleanup(pathlib.Path(reference).unlink)
+        (pathlib.Path(self.root) / "extra.md").write_text("# novo\n", encoding="utf-8")
+        report = support.audit(self.root, reference_manifest=reference)
+        self.assertEqual(report["reference_diff"]["added"], ["extra.md"])
+        self.assertIs(report["matches_reference"], False)
+        self.assertIn("SQA-026", support.codes(report))
+
+    def test_a_reference_root_failure_cannot_prove_an_addition(self):
+        # Same rule with the root itself unobserved in the reference: no entry
+        # of the readable target can be called an addition.
+        reference = self._tmp.name + "-root-hole.json"
+        root_abs = pathlib.Path(self.root).resolve()
+        real = os.scandir
+
+        def fake(path="."):
+            if pathlib.Path(str(path)).resolve() == root_abs:
+                raise PermissionError(13, "simulado", str(path))
             return real(path)
 
         with mock.patch("os.scandir", fake):
-            report = support.audit(self.root)
-        self.assertGreaterEqual(seen["privado"], 2)
-        self.assertEqual(
-            [item["rel"] for item in report["manifest"]["walk_errors"]],
-            ["references/privado"],
+            manifest = common.build_manifest(str(self.root))
+        self.assertEqual([item["rel"] for item in manifest["walk_errors"]], ["."])
+        pathlib.Path(reference).write_text(
+            common.render_json(manifest, mask=False), encoding="utf-8"
         )
-        self.assertFalse(report["manifest"]["complete"])
-        self.assertIsNone(report["target_unchanged"])
+        self.addCleanup(pathlib.Path(reference).unlink)
+        report = support.audit(self.root, reference_manifest=reference)
+        self.assertEqual(report["reference_diff"]["added"], [])
+        self.assertTrue(report["reference_diff"]["unconfirmed_added"])
+        self.assertIsNone(report["matches_reference"])
 
     def test_the_same_hole_in_both_passes_is_listed_once(self):
         hole = {"rel": "references/privado", "reason": "PermissionError"}
@@ -566,6 +693,27 @@ class InvocationDedupTest(unittest.TestCase):
                 # The evidence quotes the argument that failed, not the valid
                 # one that happened to share the line.
                 self.assertIn("'nonexistent'", found[0]["evidence"])
+
+
+class HolePathFormTest(unittest.TestCase):
+    """A hole path is compared by directory, whatever form it was written in."""
+
+    def test_trailing_slash_and_dot_prefix_still_cover_their_entries(self):
+        # A reference manifest can be written by hand or by an older version;
+        # "privado/" must cover "privado/x.md" exactly like "privado" does,
+        # otherwise an unobserved subtree is read as a proven removal.
+        for written in ("references/privado", "references/privado/", "./references/privado"):
+            with self.subTest(written=written):
+                manifest = {"entries": {}, "walk_errors": [{"rel": written, "reason": "permission"}]}
+                holes = common.hole_paths(manifest)
+                self.assertTrue(common.hole_covers(holes, "references/privado/segredo.md"))
+                self.assertFalse(common.hole_covers(holes, "references/publico.md"))
+
+    def test_an_unnamed_failure_covers_the_whole_tree(self):
+        for written in ("", "/", "."):
+            with self.subTest(written=written):
+                holes = common.hole_paths({"entries": {}, "walk_errors": [{"rel": written}]})
+                self.assertTrue(common.hole_covers(holes, "README.md"))
 
 
 if __name__ == "__main__":
