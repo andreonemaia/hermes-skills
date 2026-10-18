@@ -6,8 +6,10 @@ import io
 import json
 import pathlib
 import re
+import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 import support
 
@@ -91,7 +93,9 @@ class GeneratedDocumentTest(unittest.TestCase):
         )
 
     def test_check_mode_agrees_with_the_committed_file(self):
-        self.assertEqual(support.render_checks.main(["--check"]), 0)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(support.render_checks.main(["--check"]), 0)
 
     def test_header_cites_the_command_that_produces_the_file(self):
         header = support.render_checks.HEADER
@@ -108,6 +112,16 @@ class GeneratedDocumentTest(unittest.TestCase):
         for check in support.checks.CATALOGUE:
             self.assertEqual(text.count(f"### {check.code} — "), 1, check.code)
 
+    def test_contract_document_names_every_catalogue_code(self):
+        # contract.md is hand-written: a new check must be placed in a frente
+        # or in the transversal list, otherwise the contract silently stops
+        # describing the whole catalogue.
+        text = (
+            support.SCRIPTS.parent / "references" / "contract.md"
+        ).read_text(encoding="utf-8")
+        for check in support.checks.CATALOGUE:
+            self.assertIn(check.code, text, f"{check.code} ausente de contract.md")
+
     def test_document_summary_matches_catalogue_size(self):
         text = support.render_checks.render()
         total = len(support.checks.CATALOGUE)
@@ -117,6 +131,30 @@ class GeneratedDocumentTest(unittest.TestCase):
             f"{total} verificações: {structural} estruturais", text
         )
         self.assertIn(f"{semantic} semânticas", text)
+
+    def test_check_mode_compares_bytes_not_normalized_lines(self):
+        # A CRLF copy renders the same lines; only a byte comparison catches
+        # it, and a checkout with autocrlf must not pass silently.
+        with tempfile.TemporaryDirectory() as tmp:
+            stale = pathlib.Path(tmp) / "checks.md"
+            stale.write_bytes(
+                support.render_checks.render().replace("\n", "\r\n").encode("utf-8")
+            )
+            with mock.patch.object(
+                support.render_checks, "target_path", return_value=stale
+            ):
+                with redirect_stderr(io.StringIO()):
+                    self.assertEqual(support.render_checks.main(["--check"]), 1)
+
+    def test_checkout_pins_the_generated_file_to_lf(self):
+        # ``--check`` compares bytes; without the pin, a Windows checkout with
+        # core.autocrlf=true would turn the current file into a false stale.
+        attrs = support.SCRIPTS.parent.parent.parent / ".gitattributes"
+        self.assertTrue(attrs.exists(), f"{attrs} ausente")
+        text = attrs.read_text(encoding="utf-8")
+        self.assertRegex(
+            text, r"references/checks\.md\s+text\s+eol=lf"
+        )
 
     def test_regeneration_ignores_the_working_tree(self):
         """A stray file in the cwd must not change the rendered document."""

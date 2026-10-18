@@ -32,7 +32,7 @@
 | SQA-023 | structural | medium | A versão citada no README diverge da versão do frontmatter. |
 | SQA-024 | structural | low | A documentação contém marcadores de trabalho inacabado (TODO, TBD, FIXME). |
 | SQA-025 | structural | medium | A skill afirma isolamento, somente leitura, ausência de rede ou outra garantia forte. |
-| SQA-026 | structural | critical | O manifesto do alvo mudou entre o início e o fim da auditoria. |
+| SQA-026 | structural | critical | O manifesto do alvo difere do esperado: mudou entre o início e o fim da auditoria, ou divergiu do manifesto de referência passado em --check-unchanged. |
 | SQA-027 | structural | info | O frontmatter usa construção que o backend restrito não decide (bloco literal, âncora, mapa em fluxo). |
 | SQA-101 | semantic | medium | Nome, descrição, requisitos declarados e procedimento contam a mesma história. |
 | SQA-102 | semantic | medium | O README descreve o comportamento real sem exagerar capacidades. |
@@ -250,13 +250,13 @@ Duas formas contam como citação do vocabulário, não como pendência: o marca
 - como: _check_capability_claims: sinal automático sobre a alegação; o agente confirma ou descarta em SQA-105. Ficam fora da varredura apenas títulos de seção (a alegação está na frase abaixo) e listas de metadados (tags, keywords, category). Documentos gerados e frases que citam testes, manifestos ou checksums continuam na varredura: nomear uma evidência não comprova a alegação.
 - limites: O sinal não decide se a alegação é verdadeira, apenas onde olhar. Uma linha apoiada em manifesto ou teste permanece reported até que o agente confira a evidência. O auditor não executa o alvo: alegações não executadas permanecem reported ou unverifiable. Blocos cercados ficam fora da varredura: são exemplo de texto, não promessa da skill.
 
-### SQA-026 — O manifesto do alvo mudou entre o início e o fim da auditoria.
+### SQA-026 — O manifesto do alvo difere do esperado: mudou entre o início e o fim da auditoria, ou divergiu do manifesto de referência passado em --check-unchanged.
 
 - categoria: integrity
 - severidade padrão: critical
-- o que verifica: O manifesto do alvo mudou entre o início e o fim da auditoria.
-- como: audit_skill.py compara o manifesto antes e depois de rodar as verificações.
-- limites: Detecta alteração durante a janela de auditoria, não alterações anteriores a ela.
+- o que verifica: O manifesto do alvo difere do esperado: mudou entre o início e o fim da auditoria, ou divergiu do manifesto de referência passado em --check-unchanged.
+- como: audit_skill.py compara o manifesto antes e depois de rodar as verificações e, com --check-unchanged, compara o manifesto final com a referência.
+- limites: Cobre a janela desta execução e a referência informada; não detecta alterações anteriores à auditoria nem divergências contra referências que não foram passadas.
 
 ### SQA-027 — O frontmatter usa construção que o backend restrito não decide (bloco literal, âncora, mapa em fluxo).
 

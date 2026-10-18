@@ -332,13 +332,24 @@ Duas formas contam como citação do vocabulário, não como pendência: o marca
     ),
     Check(
         code="SQA-026",
-        title="Alvo modificado durante a auditoria",
+        title="Alvo divergiu do manifesto esperado",
         category="integrity",
         method="structural",
         default_severity="critical",
-        summary="O manifesto do alvo mudou entre o início e o fim da auditoria.",
-        how="audit_skill.py compara o manifesto antes e depois de rodar as verificações.",
-        limits="Detecta alteração durante a janela de auditoria, não alterações anteriores a ela.",
+        summary=(
+            "O manifesto do alvo difere do esperado: mudou entre o início e o fim da "
+            "auditoria, ou divergiu do manifesto de referência passado em "
+            "--check-unchanged."
+        ),
+        how=(
+            "audit_skill.py compara o manifesto antes e depois de rodar as verificações "
+            "e, com --check-unchanged, compara o manifesto final com a referência."
+        ),
+        limits=(
+            "Cobre a janela desta execução e a referência informada; não detecta "
+            "alterações anteriores à auditoria nem divergências contra referências que "
+            "não foram passadas."
+        ),
     ),
     Check(
         code="SQA-027",

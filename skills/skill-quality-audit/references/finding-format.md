@@ -10,7 +10,7 @@ justificada e em que estado de validação.
 | --- | --- | --- | --- |
 | `id` | texto | sim | código da verificação que produziu o achado (por exemplo `SQA-013`) |
 | `check` | texto | sim | título da verificação, para leitura humana |
-| `category` | texto | sim | categoria da verificação: `structure`, `documentation`, `consistency`, `security`, `privacy`, `semantic` |
+| `category` | texto | sim | categoria da verificação, uma das emitidas pelo catálogo: `claims`, `consistency`, `documentation`, `integrity`, `metadata`, `privacy`, `references`, `semantic`, `structure`, `tests` |
 | `method` | texto | sim | `structural` (executada pelo script) ou `semantic` (julgada pelo agente) |
 | `severity` | texto | sim | `info`, `low`, `medium`, `high` ou `critical` |
 | `severity_justification` | texto | sim | por que esta severidade, e não a padrão da verificação |
@@ -67,7 +67,7 @@ alvo não é reproduzido aqui e nenhum valor do alvo aparece:
 {
   "id": "SQA-013",
   "check": "Referência local quebrada",
-  "category": "documentation",
+  "category": "references",
   "method": "structural",
   "severity": "high",
   "severity_justification": "referência citada na documentação que não existe no alvo",
@@ -93,7 +93,7 @@ alvo não é reproduzido aqui e nenhum valor do alvo aparece:
 | 2 | alvo inexistente ou não é diretório |
 | 3 | uso incorreto da linha de comando |
 | 4 | falha ao gravar a saída pedida |
-| 5 | o alvo mudou durante a auditoria, ou divergiu do manifesto de referência |
+| 5 | o alvo mudou durante a auditoria (diferença entre os manifestos de antes e depois desta execução); divergência contra o manifesto de referência é achado SQA-026 crítico com código 1 |
 | 6 | falha inesperada do próprio auditor; nenhum relatório foi produzido |
 
 O código de saída resume o efeito combinado com `--fail-on`; ele não substitui a

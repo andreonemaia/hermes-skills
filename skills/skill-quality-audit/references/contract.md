@@ -41,6 +41,13 @@ As nove frentes do contrato e as verificações que as cobrem:
 | possíveis dados pessoais, segredos e referências privadas | SQA-019, SQA-020, SQA-021, SQA-022 |
 | limites de segurança e alegações de capacidade ou isolamento | SQA-025, SQA-105 |
 
+Além das nove frentes, o catálogo tem verificações transversais, que não
+pertencem a uma frente única: SQA-001 (SKILL.md ausente), SQA-024 (conteúdo
+provisório publicado), SQA-026 (divergência do manifesto esperado), SQA-027
+(construção de frontmatter fora da cobertura do leitor restrito), SQA-106
+(justificativa de severidade) e SQA-107 (encaminhamento para revisão
+independente).
+
 O catálogo completo, com severidade padrão, descrição e limites de cada
 verificação, está em `references/checks.md`.
 
@@ -82,7 +89,11 @@ listada vai para `unconfirmed_added` ou `unconfirmed_removed`, nunca para
 adição. `holes_before` e `holes_after` nomeiam as subárvores não observadas de
 cada lado, incluindo `.` quando a falha atinge a raiz e `(caminho desconhecido)`
 quando a travessia falha antes de nomear o diretório; os dois deixam a árvore
-inteira não observada. `proven_same` indica se a
+inteira não observada. Cada registro de `walk_errors` é lido pela mesma
+fronteira, aceite como o objeto `{rel, reason}` que o manifesto gera ou como a
+string que nomeia o diretório: um registro sem motivo declarado traz
+`(motivo desconhecido)` em vez de um motivo vazio ou inventado. `proven_same`
+indica se a
 comparação dos hashes comuns foi completa. `identical` responde a uma pergunta
 menor: diz apenas que nenhuma diferença foi comprovada entre as entradas
 comparadas, e por isso pode ser `true` com `complete: false`. Quem decide se a

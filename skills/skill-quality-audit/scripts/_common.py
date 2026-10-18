@@ -74,6 +74,9 @@ EXCLUDED_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 #: Reported as the location of a traversal failure whose own path is unknown.
 #: A bare "." would claim the target root failed, which is a different fact.
 UNKNOWN_PATH = "(caminho desconhecido)"
+#: Reported when a traversal record names its directory but not why it failed.
+#: Empty would read as "no reason", which is a different claim from "not stated".
+UNKNOWN_REASON = "(motivo desconhecido)"
 
 #: Extensions treated as binary even without a NUL probe.
 BINARY_SUFFIXES = (
@@ -677,6 +680,37 @@ def normalize_hole(value: object) -> str:
     return rel or "."
 
 
+def walk_error_record(item: object) -> dict:
+    """One traversal-failure record in canonical form.
+
+    This is the single boundary where the two accepted shapes meet: the dict
+    the walker writes and the bare string a hand-written or older manifest may
+    carry. Both become ``{"rel", "reason"}`` so every consumer (hole matching,
+    diff aggregation, the report and its Markdown) reads one shape. The
+    location keeps its canonical form, and a record that does not state why it
+    failed says so, instead of pretending the reason is empty.
+    """
+    if isinstance(item, dict):
+        rel, reason = item.get("rel"), item.get("reason")
+    else:
+        rel, reason = item, None
+    text = str(reason).strip() if reason is not None else ""
+    return {"rel": normalize_hole(rel), "reason": text or UNKNOWN_REASON}
+
+
+def walk_error_records(manifest: dict) -> list[dict]:
+    """Every traversal failure of one manifest, in canonical form.
+
+    A list is the contract, but a hand-written manifest may carry the single
+    record unwrapped. Reading a bare string as an iterable would walk it
+    character by character and turn one hole into a nonsense hole at ``/``.
+    """
+    raw = manifest.get("walk_errors") or []
+    if isinstance(raw, (str, dict)):
+        raw = [raw]
+    return [walk_error_record(item) for item in raw]
+
+
 def hole_paths(manifest: dict) -> list[str]:
     """Directories whose listing failed in one manifest, as relative paths.
 
@@ -684,12 +718,7 @@ def hole_paths(manifest: dict) -> list[str]:
     location could not be named: both leave the whole tree unobserved. Every
     other hole leaves only the entries below it unobserved.
     """
-    holes: list[str] = []
-    for item in manifest.get("walk_errors") or []:
-        # A manifest can be written by hand or by an older version; a bare
-        # string names the directory just as well as the current dict shape.
-        holes.append(normalize_hole(item.get("rel") if isinstance(item, dict) else item))
-    return holes
+    return [record["rel"] for record in walk_error_records(manifest)]
 
 
 def hole_covers(holes: list[str], rel: str) -> bool:
@@ -747,13 +776,13 @@ def diff_manifests(before: dict, after: dict) -> dict:
     # directory and the failure kind, the same pair the report dedupes on.
     walk_errors: list[dict] = []
     seen_holes: set[tuple[str, str]] = set()
-    for item in list(before.get("walk_errors") or []) + list(after.get("walk_errors") or []):
-        key = (str(item.get("rel") or ""), str(item.get("reason") or ""))
+    for record in walk_error_records(before) + walk_error_records(after):
+        key = (record["rel"], record["reason"])
         if key in seen_holes:
             continue
         seen_holes.add(key)
-        walk_errors.append(dict(item))
-    walk_errors.sort(key=lambda item: (str(item.get("rel") or ""), str(item.get("reason") or "")))
+        walk_errors.append(record)
+    walk_errors.sort(key=lambda item: (item["rel"], item["reason"]))
     changed = sorted(
         rel
         for rel in set(old) & set(new)
@@ -811,6 +840,29 @@ def load_manifest(path: str) -> dict:
         raise UsageError(f"manifesto inválido: {path}: {exc.msg}") from exc
     if not isinstance(data, dict) or "entries" not in data:
         raise UsageError(f"manifesto sem 'entries': {path}")
+    entries = data["entries"]
+    if not isinstance(entries, dict) or not all(
+        isinstance(item, dict) for item in entries.values()
+    ):
+        # A malformed manifest is a caller error, not an auditor crash: reading
+        # it as-is turns ``set(entries)`` into TypeError and exits 6 with no
+        # report, which is the failure mode this boundary exists to prevent.
+        raise UsageError(
+            f"manifesto inválido: 'entries' deve ser um objeto de objetos: {path}"
+        )
+    raw_errors = data.get("walk_errors")
+    if isinstance(raw_errors, (str, dict)):
+        # Same normalization the readers apply: one unwrapped record is one
+        # hole, not a string walked character by character.
+        raw_errors = [raw_errors]
+        data["walk_errors"] = raw_errors
+    if raw_errors is not None and (
+        not isinstance(raw_errors, list)
+        or not all(isinstance(item, (str, dict)) for item in raw_errors)
+    ):
+        raise UsageError(
+            f"manifesto inválido: 'walk_errors' deve ser uma lista de objetos ou textos: {path}"
+        )
     return data
 
 
@@ -959,6 +1011,15 @@ def _parse_restricted(raw: str) -> dict:
             continue
         value = _strip_comment(value).strip()
 
+        # The parent chain is what the stack will be after ``_register`` pops
+        # the levels at or below this indent. Computing it *before* the call
+        # keeps this key out of its own path, so a child that repeats its
+        # parent's name (``name:`` then ``  name: x``) is not a duplicate.
+        marker = (tuple(path for level, path in stack if level < indent), key)
+        if marker in seen:
+            unsupported.append({"line": line_no, "construct": "duplicate_key", "key": key})
+        seen.add(marker)
+
         if value[:1] in ("|", ">"):
             unsupported.append(
                 {"line": line_no, "construct": "block_scalar", "key": key}
@@ -975,24 +1036,32 @@ def _parse_restricted(raw: str) -> dict:
         else:
             if value == "":
                 _register(data, stack, indent, key, {}, unsupported, line_no)
-            elif value.startswith("[") and value.endswith("]"):
-                items = [item.strip() for item in value[1:-1].split(",")]
-                _register(
-                    data,
-                    stack,
-                    indent,
-                    key,
-                    [_unquote(item) for item in items if item.strip()],
-                    unsupported,
-                    line_no,
-                )
+            elif value.startswith("["):
+                items, closed = _split_flow_items(value)
+                if not closed:
+                    unsupported.append(
+                        {"line": line_no, "construct": "malformed_flow", "key": key}
+                    )
+                    _register(data, stack, indent, key, None, unsupported, line_no)
+                elif any(item[:1] in ("[", "{") for item in items):
+                    # Nested flow collections are outside the restricted grammar.
+                    unsupported.append(
+                        {"line": line_no, "construct": "flow_nesting", "key": key}
+                    )
+                    _register(data, stack, indent, key, None, unsupported, line_no)
+                else:
+                    _register(
+                        data,
+                        stack,
+                        indent,
+                        key,
+                        [_unquote(item) for item in items if item.strip()],
+                        unsupported,
+                        line_no,
+                    )
             else:
                 _register(data, stack, indent, key, _unquote(value), unsupported, line_no)
 
-        marker = (tuple(path for _, path in stack), key)
-        if marker in seen:
-            unsupported.append({"line": line_no, "construct": "duplicate_key", "key": key})
-        seen.add(marker)
     return {
         "data": data,
         "unsupported": unsupported,
@@ -1020,6 +1089,46 @@ def _unquote(value: str) -> str:
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
         return text[1:-1]
     return text
+
+
+def _split_flow_items(value: str) -> tuple[list[str], bool]:
+    """Split ``[a, b]`` on commas that are outside quotes.
+
+    Returns the raw items and whether the closing bracket was found. A comma
+    inside quotes is data, not a separator: ``["win, linux"]`` is one item.
+    """
+    body = value[1:]
+    items: list[str] = []
+    current: list[str] = []
+    quote = None
+    escaped = False
+    for position, char in enumerate(body):
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\" and quote == '"':
+                escaped = True
+            elif char == quote:
+                quote = None
+            current.append(char)
+            continue
+        if char in "\"'":
+            quote = char
+            current.append(char)
+            continue
+        if char == ",":
+            items.append("".join(current).strip())
+            current = []
+            continue
+        if char == "]":
+            rest = body[position + 1 :].strip()
+            if rest and not rest.startswith("#"):
+                # Trailing content after the list: not the restricted grammar.
+                return items, False
+            items.append("".join(current).strip())
+            return [item for item in items if item], True
+        current.append(char)
+    return items, False
 
 
 def _register(
@@ -1221,7 +1330,9 @@ def _mask_text(node):
     """Mask every string in ``node``, dictionary keys included."""
     if isinstance(node, str):
         return redact(node)
-    if isinstance(node, list):
+    if isinstance(node, (list, tuple, set)):
+        # A hand-written manifest may carry a tuple or a set; mask every item
+        # instead of letting the raw value through.
         return [_mask_text(item) for item in node]
     if isinstance(node, dict):
         return {redact(str(key)): _mask_text(value) for key, value in node.items()}
@@ -1406,6 +1517,23 @@ def render_markdown(report: dict, *, mask: bool = True) -> str:
     else:
         add("- Confere com o manifesto de referência: não comparado "
             "(sem `--check-unchanged`)")
+    reference_diff = report.get("reference_diff") or {}
+    if report.get("reference_compared") and reference_diff.get("walk_errors"):
+        listed = ", ".join(
+            f"`{item['rel']}` ({item['reason']})"
+            for item in reference_diff["walk_errors"]
+        )
+        add(
+            f"- Referência com diretórios não listados: "
+            f"{len(reference_diff['walk_errors'])}: {listed}"
+        )
+        add(
+            "- A comparação com a referência é inconclusiva sob esses diretórios: "
+            "ausência de uma entrada ali não prova remoção."
+        )
+    if report.get("reference_compared") and reference_diff.get("unverifiable"):
+        listed = ", ".join(f"`{rel}`" for rel in reference_diff["unverifiable"])
+        add(f"- Sem conteúdo legível para comparar com a referência: {listed}")
     unreadable = report.get("manifest_unreadable") or []
     if unreadable:
         listed = ", ".join(f"`{rel}`" for rel in unreadable)
@@ -1571,12 +1699,15 @@ def semantic_checklist() -> list[dict]:
 # ------------------------------------------------------------------------ output
 
 
-def resolve_out(path: str, target_root: str) -> str:
+def resolve_out(path: str, target_root: str, protected: str | None = None) -> str:
     """Absolute output path, refusing anything inside the target.
 
     Comparison is case-insensitive and follows links, because on Windows the
     same directory is reachable through different spellings: comparing raw
-    strings let ``--out`` point back inside the target.
+    strings let ``--out`` point back inside the target. ``protected`` is an
+    input the run must not destroy, such as the reference manifest: it lives
+    outside the target, so the target check alone would let the report
+    overwrite the very file the comparison is being made against.
     """
     out_abs = os.path.abspath(path)
     out_cmp = os.path.normcase(os.path.realpath(out_abs))
@@ -1589,6 +1720,12 @@ def resolve_out(path: str, target_root: str) -> str:
         raise UsageError(
             "a saída não pode ficar dentro do alvo auditado: a auditoria é somente leitura"
         )
+    if protected is not None:
+        protected_cmp = os.path.normcase(os.path.realpath(os.path.abspath(protected)))
+        if out_cmp == protected_cmp:
+            raise UsageError(
+                "a saída não pode sobrescrever o manifesto de referência"
+            )
     return out_abs
 
 

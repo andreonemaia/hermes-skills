@@ -21,9 +21,9 @@ Exit codes (contract, also documented in README.md):
 * 3  the caller asked for something the tool refuses (bad option, output path
      inside the target);
 * 4  the report could not be written;
-* 5  the target changed while the audit was running, or diverged from the
-     reference manifest given with ``--check-unchanged``: the read-only promise
-     broke or the target is not the audited content;
+* 5  the target changed while the audit was running: the read-only promise
+     broke. Divergence against the manifest given with ``--check-unchanged``
+     is not a code 5; it is a critical SQA-026 finding and exits with 1;
 * 6  the auditor itself failed unexpectedly: no report was produced.
 
 Standard library only.
@@ -179,7 +179,8 @@ def _unique_walk_errors(errors: list[dict]) -> list[dict]:
     """One record per (directory, reason), sorted: the same hole seen twice."""
     unique: dict[tuple, dict] = {}
     for item in errors:
-        unique.setdefault((item["rel"], item["reason"]), dict(item))
+        record = common.walk_error_record(item)
+        unique.setdefault((record["rel"], record["reason"]), record)
     return [unique[key] for key in sorted(unique)]
 
 
@@ -1739,7 +1740,13 @@ def audit_target(
     for check in CATALOGUE:
         if check.method != "structural" or check.code == INTEGRITY_CODE:
             continue
-        outcome = REGISTRY[check.code](ctx, check.code)
+        runner = REGISTRY.get(check.code)
+        if runner is None:
+            # A catalogue entry without a runner would surface as a KeyError
+            # deep in the loop and degrade to exit 6 with no report. Name the
+            # missing code instead, so the defect is obvious.
+            raise RuntimeError(f"catalogue check {check.code} has no runner")
+        outcome = runner(ctx, check.code)
         findings.extend(outcome["findings"])
         limits.extend(outcome["limits"])
         reported.extend(outcome["reported"])
@@ -1976,7 +1983,7 @@ def _cmd_audit(args) -> int:
     )
     text = common.render_json(report) if args.format == "json" else common.render_markdown(report)
     if args.out:
-        out = common.resolve_out(args.out, args.target)
+        out = common.resolve_out(args.out, args.target, args.check_unchanged)
         common.write_output(out, text)
         common.emit(sys.stdout, f"relatório: {out}\n")
     else:

@@ -18,6 +18,8 @@ import io
 import json
 import os
 import pathlib
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -567,6 +569,79 @@ class TraversalFailureTest(unittest.TestCase):
             any("adicionado(s)" in reason for reason in reasons), reasons
         )
 
+    def test_bare_string_walk_errors_reach_the_diff_as_records(self):
+        # A hand-written or older reference may name a hole as a bare string.
+        # The diff reads it at the same boundary as the walker's dicts, so the
+        # hole is still a hole and the missing reason is stated, not invented.
+        diff = common.diff_manifests(
+            {"entries": {}, "walk_errors": ["references/privado/"]},
+            {"entries": {}},
+        )
+        self.assertEqual(diff["holes_before"], ["references/privado"])
+        self.assertEqual(
+            diff["walk_errors"],
+            [{"rel": "references/privado", "reason": common.UNKNOWN_REASON}],
+        )
+        self.assertEqual(diff["holes_after"], [])
+
+    def test_the_cli_accepts_a_hand_written_reference_with_bare_errors(self):
+        # End to end through ``audit --check-unchanged``: the reference names
+        # its hole as a string, and both exports must still be written.
+        reference = pathlib.Path(self._tmp.name) / "hand-written.json"
+        with mock.patch("os.scandir", self._failing_scandir("privado")):
+            manifest = common.build_manifest(str(self.root))
+        manifest["walk_errors"] = ["references/privado"]
+        reference.write_text(
+            common.render_json(manifest, mask=False), encoding="utf-8"
+        )
+        outputs = {
+            "json": pathlib.Path(self._tmp.name) / "report.json",
+            "md": pathlib.Path(self._tmp.name) / "report.md",
+        }
+        for fmt, out in outputs.items():
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(support.SCRIPTS / "audit_skill.py"),
+                    "audit",
+                    "--target",
+                    str(self.root),
+                    "--check-unchanged",
+                    str(reference),
+                    "--format",
+                    fmt,
+                    "--out",
+                    str(out),
+                ],
+                cwd=str(support.SCRIPTS.parent),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            self.assertEqual(proc.returncode, common.EXIT_OK, proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+        report = json.loads(outputs["json"].read_text(encoding="utf-8"))
+        self.assertEqual(
+            report["reference_diff"]["walk_errors"],
+            [{"rel": "references/privado", "reason": common.UNKNOWN_REASON}],
+        )
+        self.assertIsNone(report["matches_reference"])
+        markdown = outputs["md"].read_text(encoding="utf-8")
+        # The Markdown must state the same hole the JSON carries, otherwise a
+        # reader of the report cannot tell why the comparison is inconclusive.
+        self.assertIn("Referência com diretórios não listados", markdown)
+        self.assertIn(common.UNKNOWN_REASON, markdown)
+        self.assertIn("references/privado", markdown)
+        self.assertIn("inconclusivo", markdown)
+        self.assertEqual(support.findings(report, "SQA-026"), [])
+        reasons = [
+            item["reason"] for item in report["limits"] if item["id"] == "SQA-026"
+        ]
+        self.assertTrue(reasons and "references/privado" in reasons[0], reasons)
+        markdown = outputs["md"].read_text(encoding="utf-8")
+        self.assertIn("references/privado", markdown)
+
     def test_a_real_addition_beside_the_reference_hole_is_still_a_divergence(self):
         # Control: the reference hole hides ``privado``, but a file created in
         # the target outside it was observed by the reference and is a proven
@@ -746,6 +821,189 @@ class HolePathFormTest(unittest.TestCase):
         holes = common.hole_paths(manifest)
         self.assertTrue(common.hole_covers(holes, "references/privado/x.md"))
         self.assertTrue(common.hole_covers(holes, "README.md"))
+
+
+class ManifestBoundaryTest(unittest.TestCase):
+    """Malformed or unwrapped manifest records are normalized, not fatal."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = support.build_skill(
+            self._tmp.name, files={"README.md": "# alvo\n", "references/ok.md": "# ok\n"}
+        )
+        self.work = pathlib.Path(self._tmp.name)
+
+    def _run(self, reference, out=None, cwd=None, fmt="json"):
+        argv = [
+            sys.executable,
+            str(support.SCRIPTS / "audit_skill.py"),
+            "audit",
+            "--target",
+            str(self.root),
+            "--check-unchanged",
+            str(reference),
+            "--format",
+            fmt,
+        ]
+        if out is not None:
+            argv += ["--out", str(out)]
+        return subprocess.run(
+            argv,
+            cwd=str(cwd or support.SCRIPTS.parent),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    def _reference(self, name, payload):
+        path = self.work / name
+        path.write_text(
+            payload if isinstance(payload, str) else json.dumps(payload),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_an_unwrapped_record_is_read_like_a_one_item_list(self):
+        # Only a list is contract, but a hand-written manifest may carry the
+        # single record bare. Iterating the string would walk it by character.
+        for raw in ("references/privado", {"rel": "references/privado", "reason": "permission"}):
+            with self.subTest(raw=raw):
+                diff = common.diff_manifests(
+                    {"entries": {}, "walk_errors": raw}, {"entries": {}}
+                )
+                self.assertEqual(diff["holes_before"], ["references/privado"])
+                self.assertEqual(diff["walk_errors"][0]["rel"], "references/privado")
+
+    def test_a_record_without_a_reason_keeps_the_unknown_reason(self):
+        record = {"rel": "references/privado"}
+        self.assertEqual(
+            common.hole_paths({"entries": {}, "walk_errors": [record]}),
+            ["references/privado"],
+        )
+        diff = common.diff_manifests(
+            {"entries": {}, "walk_errors": [record]}, {"entries": {}}
+        )
+        self.assertEqual(
+            diff["walk_errors"],
+            [{"rel": "references/privado", "reason": common.UNKNOWN_REASON}],
+        )
+
+    def test_a_malformed_entries_mapping_is_a_usage_error(self):
+        # ``entries`` as a list used to reach set() and exit 6 with no report.
+        reference = self._reference("entries-list.json", {"entries": [{"rel": "README.md"}]})
+        proc = self._run(reference)
+        self.assertEqual(proc.returncode, common.EXIT_USAGE, proc.stderr)
+        self.assertIn("entries", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_a_corrupted_reference_is_a_usage_error(self):
+        reference = self._reference("truncated.json", '{"entries": {"README.md": ')
+        proc = self._run(reference)
+        self.assertEqual(proc.returncode, common.EXIT_USAGE, proc.stderr)
+        self.assertIn("truncated.json", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_a_bare_string_walk_error_in_a_reference_file_is_accepted(self):
+        # The reference file is read through ``load_manifest``; a single
+        # unwrapped record must become one hole, not crash the diff.
+        manifest = common.build_manifest(self.root)
+        manifest["walk_errors"] = "references/privado"
+        reference = self._reference("bare-string.json", manifest)
+        proc = self._run(reference)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertNotIn(proc.returncode, (common.EXIT_USAGE, common.EXIT_INTERNAL))
+        report = json.loads(proc.stdout)
+        self.assertTrue(report["reference_compared"])
+        self.assertIsNone(report["matches_reference"])
+        self.assertEqual(
+            report["reference_diff"]["walk_errors"],
+            [{"rel": "references/privado", "reason": common.UNKNOWN_REASON}],
+        )
+        self.assertEqual(
+            [item["id"] for item in report["limits"]],
+            [support.audit_skill.INTEGRITY_CODE],
+        )
+
+    def test_a_reference_without_entries_is_a_usage_error(self):
+        # A well-formed JSON document that is not a manifest: the boundary
+        # refuses it instead of comparing against nothing.
+        reference = self._reference("empty.json", {})
+        proc = self._run(reference)
+        self.assertEqual(proc.returncode, common.EXIT_USAGE, proc.stderr)
+        self.assertIn("entries", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_a_relative_output_inside_the_target_is_refused(self):
+        # Resolved against the working directory, not against the literal
+        # argument, so the guard cannot be walked around with a bare name.
+        proc = self._run(
+            self._reference("ok.json", {"entries": {}}), out="report.md", cwd=self.root
+        )
+        self.assertEqual(proc.returncode, common.EXIT_USAGE, proc.stderr)
+        self.assertFalse((self.root / "report.md").exists())
+
+    def test_the_output_cannot_overwrite_the_reference(self):
+        reference = self._reference("reference.json", {"entries": {}})
+        before = reference.read_bytes()
+        proc = self._run(reference, out=reference)
+        self.assertEqual(proc.returncode, common.EXIT_USAGE, proc.stderr)
+        self.assertEqual(reference.read_bytes(), before)
+
+    def test_dotdot_cannot_smuggle_the_output_back_into_the_target(self):
+        # Resolves inside the target through the parent directory; the literal
+        # path is outside it, so only the resolved comparison catches this.
+        out = self.root / ".." / self.root.name / "report.md"
+        proc = self._run(self._reference("ok.json", {"entries": {}}), out=out)
+        self.assertEqual(proc.returncode, common.EXIT_USAGE, proc.stderr)
+        self.assertFalse((self.root / "report.md").exists())
+
+
+class RestrictedParserDuplicateTest(unittest.TestCase):
+    """A child key repeating its parent's name is not a duplicate key."""
+
+    def test_a_nested_key_named_like_its_parent_is_not_flagged(self):
+        parsed = common.read_frontmatter(
+            "---\nname:\n  name: exemplo\nversion: 1\n---\n", backend="restricted"
+        )
+        self.assertEqual(parsed["status"], "ok")
+        self.assertNotIn(
+            "duplicate_key", [item["construct"] for item in parsed["unsupported"]]
+        )
+
+    def test_a_real_duplicate_is_still_flagged(self):
+        parsed = common.read_frontmatter(
+            "---\nname: a\nname: b\n---\n", backend="restricted"
+        )
+        self.assertIn(
+            "duplicate_key", [item["construct"] for item in parsed["unsupported"]]
+        )
+
+
+class RestrictedFlowTest(unittest.TestCase):
+    """Inline lists split on commas outside quotes only."""
+
+    def test_a_comma_inside_quotes_is_one_item(self):
+        parsed = common.read_frontmatter(
+            '---\nname: x\nplatforms: ["win, linux"]\n---\n', backend="restricted"
+        )
+        self.assertEqual(parsed["data"]["platforms"], ["win, linux"])
+        self.assertEqual(parsed["unsupported"], [])
+
+    def test_a_malformed_flow_value_is_recorded_not_guessed(self):
+        # A naive split used to turn ``["win, linux"]`` into two broken items
+        # and an unbalanced bracket into a plausible-looking scalar.
+        for raw in ('platforms: ["a", "b"', 'platforms: [["a"]]', "platforms: [a] x"):
+            with self.subTest(raw=raw):
+                parsed = common.read_frontmatter(
+                    f"---\nname: x\n{raw}\n---\n", backend="restricted"
+                )
+                self.assertIsNone(parsed["data"].get("platforms"))
+                self.assertIn(
+                    "malformed_flow",
+                    [item["construct"] for item in parsed["unsupported"]],
+                )
 
 
 if __name__ == "__main__":

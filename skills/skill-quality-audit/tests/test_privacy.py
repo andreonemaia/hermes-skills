@@ -123,7 +123,9 @@ class PrivacyClassTest(unittest.TestCase):
         self.assertEqual({item["file"] for item in found}, {"docs/setup.md"})
         for item in found:
             self.assertNotIn(EMAIL, item["evidence"])
-            self.assertNotIn("someone", item["evidence"])
+            # Neither half of the address may survive the mask.
+            self.assertNotIn("pessoa", item["evidence"])
+            self.assertNotIn("empresa-real", item["evidence"])
 
     def test_generic_documentation_domains_are_ignored(self):
         report = _audit_files(

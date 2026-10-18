@@ -98,8 +98,16 @@ def main(argv: list[str] | None = None) -> int:
     path = target_path()
     rendered = render()
     if args.check:
-        current = path.read_text(encoding="utf-8") if path.exists() else ""
-        if current != rendered:
+        # Compare bytes: ``read_text`` applies universal-newline translation,
+        # so a CRLF checkout of an identical file would pass while the
+        # committed bytes differ from what this script writes.
+        expected = rendered.encode("utf-8")
+        try:
+            current = path.read_bytes() if path.exists() else b""
+        except OSError as exc:
+            print(f"não foi possível ler {path}: {exc}", file=sys.stderr)
+            return 1
+        if current != expected:
             print(f"desatualizado: {path}", file=sys.stderr)
             return 1
         print(f"atualizado: {path}")

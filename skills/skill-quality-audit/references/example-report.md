@@ -67,7 +67,7 @@ python scripts/audit_skill.py audit --target ../alvo \
   "findings": [
     {
       "id": "SQA-019",
-      "check": "Credencial ou segredo em potencial",
+      "check": "Valor com formato de segredo",
       "category": "privacy",
       "method": "structural",
       "severity": "critical",
@@ -86,7 +86,7 @@ python scripts/audit_skill.py audit --target ../alvo \
     {
       "id": "SQA-018",
       "check": "Plataforma declarada sem evidência",
-      "category": "structure",
+      "category": "claims",
       "method": "structural",
       "severity": "medium",
       "severity_justification": "declaração de plataforma sem nenhuma menção a validação nessa plataforma",
@@ -117,10 +117,11 @@ python scripts/audit_skill.py audit --target ../alvo \
 - `target_unchanged` e `manifest_diff` provam que a janela de auditoria não
   alterou o alvo. Não provam ausência de efeitos externos.
 - `matches_reference` é `null` porque esta execução não usou
-  `--check-unchanged`: "não comparado" não é "igual". `unverifiable` lista
+  `--check-unchanged`: "não comparado" não é "igual". `manifest_unreadable` lista
   arquivos cujo conteúdo não pôde ser lido; quando não está vazio,
   `target_unchanged` fica `null` (inconclusivo), nunca `true`. O mesmo vale para
-  `holes_before`/`holes_after`: ausência de uma entrada só prova adição ou
+  `manifest_diff.unverifiable`, que lista o que ficou ilegível de cada lado, e
+  para `holes_before`/`holes_after`: ausência de uma entrada só prova adição ou
   remoção do lado que foi observado, e o que fica sob uma subárvore ilegível vai
   para `unconfirmed_added`/`unconfirmed_removed`.
 - `publication.report_safe_to_attach` é `false`: o relatório é mascarado, mas só
