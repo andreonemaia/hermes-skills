@@ -71,6 +71,9 @@ EXCLUDED_DIRS = frozenset(
 )
 EXCLUDED_SUFFIXES = (".pyc", ".pyo", ".so", ".dll", ".dylib", ".exe")
 EXCLUDED_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
+#: Reported as the location of a traversal failure whose own path is unknown.
+#: A bare "." would claim the target root failed, which is a different fact.
+UNKNOWN_PATH = "(caminho desconhecido)"
 
 #: Extensions treated as binary even without a NUL probe.
 BINARY_SUFFIXES = (
@@ -184,9 +187,12 @@ PRIVACY_PATTERNS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
     (
         "credential_assignment",
         "SQA-019",
+        # The optional inner quote covers a value that itself starts with a
+        # quote (``password = "'synthAbc9!"``): without it the char class stops
+        # at the first character and the value is never masked.
         re.compile(
             r"(?i)\b(?:password|passwd|senha|api[_-]?key|apikey|access[_-]?key|secret|token)"
-            r"\b\s*[:=]\s*[\"']?([^\s\"',;]{8,})"
+            r"\b\s*[:=]\s*[\"']?(['\"]?[^\s\"',;]{8,})"
         ),
     ),
     ("aws_access_key_id", "SQA-019", re.compile(r"\b(AKIA[0-9A-Z]{16})\b")),
@@ -198,7 +204,20 @@ PRIVACY_PATTERNS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
     ("jwt", "SQA-019", re.compile(r"\b(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b")),
     ("bearer_token", "SQA-019", re.compile(r"(?i)\bbearer\s+([A-Za-z0-9._-]{16,})")),
     ("private_key_block", "SQA-019", re.compile(r"(-----BEGIN [A-Z ]*PRIVATE KEY-----)")),
-    ("windows_user_path", "SQA-020", re.compile(r"(?i)\b[a-z]:\\users\\([^\\\s\"'`]+)")),
+    (
+        # Both separators: a Windows profile printed by Python or by git-bash
+        # uses forward slashes as often as backslashes.
+        "windows_user_path",
+        "SQA-020",
+        re.compile(r"(?i)(?<![\w./])[a-z]:[\\/]users[\\/]([^\\/\s\"'`]+)"),
+    ),
+    (
+        # The same Windows profile reached through an MSYS/git-bash spelling,
+        # which is how paths appear in this repository's own docs.
+        "msys_user_path",
+        "SQA-020",
+        re.compile(r"(?i)(?<![\w./])/[a-z]/users/([^/\s\"'`]+)"),
+    ),
     ("posix_user_path", "SQA-020", re.compile(r"(?<![\w.])/home/([a-z0-9._-]+)")),
     ("email", "SQA-020", re.compile(r"\b([A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,}))\b")),
     ("national_id", "SQA-020", re.compile(r"\b(\d{3}\.\d{3}\.\d{3}-\d{2})\b")),
@@ -307,18 +326,100 @@ def is_placeholder(value: str) -> bool:
     return lowered in PLACEHOLDER_VALUES
 
 
-#: Characters that no credential format uses, but source code does.
-CODE_VALUE_CHARS = "()[]"
+#: Text that replaces a value matching a privacy pattern.
+SECRET_MASK = "<redacted>"
+
+
+def redact(value: str) -> str:
+    """Mask every value in ``value`` that matches a privacy pattern.
+
+    Only the matched value is replaced; the key, the operator and the
+    punctuation around it survive, so a masked field still shows *what kind* of
+    value was there. No length is kept in the mask: the length is reported per
+    class by SQA-019..SQA-022, which is where a reader needs it.
+
+    This is the single masking primitive of the report: exported fields, the
+    Markdown renderer and the evidence of a finding all call it, so no format
+    can be masked in one output and leak in another.
+    """
+    text = value
+    for _cls, _code, pattern in PRIVACY_PATTERNS:
+
+        def _replace(match: re.Match) -> str:
+            # A pattern whose group 1 can match empty would otherwise inject the
+            # mask between every character: an empty value has nothing to hide.
+            if not match.group(1):
+                return match.group(0)
+            return match.group(0).replace(match.group(1), SECRET_MASK)
+
+        text = pattern.sub(_replace, text)
+    return text
+
+
+#: A whole call or subscript expression: ``marker.group(1)``, ``os.environ["X"]``,
+#: ``get_token()``. Bracket characters alone are not evidence of code:
+#: ``synthAbc9[xyz]!`` is a literal that happens to contain them, and it is not
+#: a bare identifier followed by accessors, so it does not match.
+
+
+def _is_identifier_start(char: str) -> bool:
+    return char.isascii() and (char.isalpha() or char == "_")
+
+
+def _is_identifier_char(char: str) -> bool:
+    return char.isascii() and (char.isalnum() or char == "_")
 
 
 def is_code_expression(value: str) -> bool:
-    """True for a code expression that merely follows ``token =``.
+    """True only for a value that is one complete call or subscript expression.
 
     The assignment pattern matches ``token = marker.group(1)`` as readily as a
-    real secret; brackets and parentheses only appear in the former, so they
-    are treated as evidence of source code rather than of a leaked value.
+    real secret. A value is source code when the *whole* value is an identifier
+    followed by accessors: ``name(...)``, ``name.attr``, ``name[...]``, or a
+    chain of them. A literal that merely contains a bracket or a parenthesis is
+    a leaked value, not an expression, so ``synthAbc9[xyz]!`` stays a finding.
+
+    Brackets are matched by scanning, not by a nested regular expression, so
+    ``fmt(a(b(c(d))))`` is recognised at any depth. An accessor left open at
+    the end of the value counts as code too: the assignment pattern stops at a
+    quote, so ``os.environ["X"]`` reaches this function truncated as
+    ``os.environ[``. Characters are only read: nothing is executed or evaluated.
     """
-    return any(char in value for char in CODE_VALUE_CHARS)
+    text = value.strip()
+    if not text or not _is_identifier_start(text[0]):
+        return False
+    index = 1
+    while index < len(text) and _is_identifier_char(text[index]):
+        index += 1
+    accessors = 0
+    while index < len(text):
+        char = text[index]
+        if char == ".":
+            index += 1
+            start = index
+            while index < len(text) and _is_identifier_char(text[index]):
+                index += 1
+            if index == start:
+                return False
+            accessors += 1
+            continue
+        if char in "([":
+            closer = ")" if char == "(" else "]"
+            depth = 1
+            index += 1
+            while index < len(text) and depth:
+                if text[index] == char:
+                    depth += 1
+                elif text[index] == closer:
+                    depth -= 1
+                index += 1
+            if depth:
+                # The value ended inside the accessor: truncated, not literal.
+                return True
+            accessors += 1
+            continue
+        return False
+    return accessors > 0
 
 
 def is_repeated_pattern(value: str) -> bool:
@@ -331,15 +432,37 @@ def is_repeated_pattern(value: str) -> bool:
     return bool(digits) and len(set(digits)) == 1
 
 
-def walk_target(root: str) -> list[dict]:
+def walk_target(root: str, errors: list[dict] | None = None) -> list[dict]:
     """Every entry under ``root`` except the excluded noise, sorted by path.
 
     Symlinks are reported but never followed, so a link pointing outside the
     target cannot pull foreign content into the audit.
+
+    ``errors``, when given, receives one item per directory whose listing
+    failed. A subtree that cannot be entered is a hole in the manifest, not an
+    empty subtree: without the hole the report would describe a shorter tree as
+    the whole target and claim stability over content it never saw. Permissions
+    are never worked around, only declared.
     """
     root_abs = os.path.abspath(root)
     entries: list[dict] = []
-    for current, dirnames, filenames in os.walk(root_abs, followlinks=False):
+
+    def _on_error(exc: OSError) -> None:
+        if errors is None:
+            return
+        path = getattr(exc, "filename", None)
+        try:
+            rel = _rel(path, root_abs) if path else UNKNOWN_PATH
+        except (OSError, ValueError):
+            # A path outside the target (another drive, a broken mount) has no
+            # relative form; the failure still has to be recorded, and its
+            # location stays explicitly unknown instead of naming the root.
+            rel = UNKNOWN_PATH
+        errors.append({"rel": rel, "reason": type(exc).__name__})
+
+    for current, dirnames, filenames in os.walk(
+        root_abs, followlinks=False, onerror=_on_error
+    ):
         dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDED_DIRS)
         for name in sorted(dirnames):
             path = os.path.join(current, name)
@@ -376,16 +499,18 @@ def text_files(root: str) -> list[dict]:
     return text_files_with_exclusions(root)[0]
 
 
-def text_files_with_exclusions(root: str) -> tuple[list[dict], list[dict]]:
+def text_files_with_exclusions(root: str, errors: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
     """Text-file entries plus the files skipped only because of their suffix.
 
     The second list is what makes the scan boundary auditable: a file that is
     never decoded still appears in the report, with the reason, instead of
-    disappearing from coverage.
+    disappearing from coverage. ``errors`` is passed through to
+    :func:`walk_target` so a directory that could not be listed is declared
+    instead of looking like an empty one.
     """
     out = []
     excluded = []
-    for entry in walk_target(root):
+    for entry in walk_target(root, errors):
         if entry["kind"] != "file":
             continue
         suffix = os.path.splitext(entry["abs"])[1].lower()
@@ -455,10 +580,18 @@ def build_manifest(root: str) -> dict:
 
     The manifest is the evidence behind the read-only promise: the auditor
     builds it before and after the checks and reports the difference.
+
+    ``walk_errors`` and ``complete`` are part of the evidence, not decoration.
+    A manifest that could not list part of the target is shorter, not equal: it
+    must not be read as proof that nothing changed inside the subtree it never
+    reached. The manifest itself is a *technical* artifact and stays raw (paths
+    and symlink destinations unmasked) so that two manifests can be compared
+    exactly; only the report's copy of it is masked.
     """
     root_abs = os.path.abspath(root)
     entries: dict[str, dict] = {}
-    for entry in walk_target(root_abs):
+    walk_errors: list[dict] = []
+    for entry in walk_target(root_abs, walk_errors):
         rel = entry["rel"]
         if entry["kind"] == "symlink":
             try:
@@ -486,16 +619,26 @@ def build_manifest(root: str) -> dict:
         digest.update(b"\0")
         digest.update(json.dumps(entries[rel], sort_keys=True).encode("utf-8"))
         digest.update(b"\n")
+    unreadable = unreadable_entries(entries)
     return {
         "root": os.path.basename(root_abs),
         "entry_count": len(entries),
         "file_count": sum(1 for v in entries.values() if v["kind"] == "file"),
-        "unreadable": unreadable_entries(entries),
+        "unreadable": unreadable,
+        "walk_errors": walk_errors,
+        # ``complete`` answers one question only: could this manifest see every
+        # directory of the target? A hole in the traversal or a file whose
+        # content could not be read both make it false.
+        "complete": not walk_errors and not unreadable,
         "digest": digest.hexdigest(),
         "entries": entries,
         "excluded_dirs": sorted(EXCLUDED_DIRS),
         "excluded_names": sorted(EXCLUDED_NAMES),
         "excluded_suffixes": list(EXCLUDED_SUFFIXES),
+        # Declared on purpose: this artifact is not a publishable output. The
+        # published report masks its copy; this one keeps raw paths so the
+        # comparison stays exact.
+        "private": True,
     }
 
 
@@ -520,14 +663,29 @@ def diff_manifests(before: dict, after: dict) -> dict:
     """Added, removed, changed and *unverifiable* entries between two manifests.
 
     A file whose content could not be read is neither equal nor different: it
-    lands in ``unverifiable`` and makes ``complete`` false. ``identical`` only
-    speaks about the entries that could be compared, so callers must consult
-    ``complete`` before claiming the target stayed the same.
+    lands in ``unverifiable`` and makes ``complete`` false. A traversal hole on
+    either side does the same: the two manifests may agree only because both
+    stopped at the same locked door, which is not evidence of stability.
+    ``identical`` only speaks about the entries that could be compared, so
+    callers must consult ``complete`` before claiming the target stayed the
+    same.
     """
     old, new = before.get("entries", {}), after.get("entries", {})
     added = sorted(set(new) - set(old))
     removed = sorted(set(old) - set(new))
     unreadable = set(unreadable_entries(old)) | set(unreadable_entries(new))
+    # The same hole seen on both passes is one hole, not two: a reader counting
+    # entries must not conclude the target is worse than it is. Identity is the
+    # directory and the failure kind, the same pair the report dedupes on.
+    walk_errors: list[dict] = []
+    seen_holes: set[tuple[str, str]] = set()
+    for item in list(before.get("walk_errors") or []) + list(after.get("walk_errors") or []):
+        key = (str(item.get("rel") or ""), str(item.get("reason") or ""))
+        if key in seen_holes:
+            continue
+        seen_holes.add(key)
+        walk_errors.append(dict(item))
+    walk_errors.sort(key=lambda item: (str(item.get("rel") or ""), str(item.get("reason") or "")))
     changed = sorted(
         rel
         for rel in set(old) & set(new)
@@ -538,8 +696,9 @@ def diff_manifests(before: dict, after: dict) -> dict:
         "removed": removed,
         "changed": changed,
         "unverifiable": sorted(unreadable),
+        "walk_errors": walk_errors,
         "identical": not (added or removed or changed),
-        "complete": not unreadable and not (added or removed),
+        "complete": not unreadable and not walk_errors and not (added or removed),
         "digest_before": before.get("digest"),
         "digest_after": after.get("digest"),
     }
@@ -950,9 +1109,141 @@ def summarise(findings: list[dict]) -> dict:
 # --------------------------------------------------------------------- rendering
 
 
-def render_json(report: dict) -> str:
-    """Stable JSON: sorted keys, UTF-8 text, trailing newline."""
-    return json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+#: Sections of the report made of records that quote the audited target. Every
+#: string in them is masked, keys included: a field this tool writes itself can
+#: still interpolate a value read from the target (``alinhar o README à versão
+#: <version>``), so listing field names one by one leaves the next such field
+#: free to leak. The tool's own vocabulary in these records (codes, severities,
+#: titles) carries no privacy-shaped text, so masking it changes nothing.
+MASKED_RECORDS = ("findings", "reported_only", "limits", "checks_run")
+
+#: Sections masked in full: every string inside them, keys included.
+MASKED_TREES = ("skill", "frontmatter", "coverage")
+
+
+def _mask_text(node):
+    """Mask every string in ``node``, dictionary keys included."""
+    if isinstance(node, str):
+        return redact(node)
+    if isinstance(node, list):
+        return [_mask_text(item) for item in node]
+    if isinstance(node, dict):
+        return {redact(str(key)): _mask_text(value) for key, value in node.items()}
+    return node
+
+
+def _mask_entry_map(entries: dict) -> dict:
+    """Mask entry paths, keeping one entry per raw path.
+
+    Two paths that differ only inside a masked value collapse into the same
+    key. The second one keeps its place under a numeric suffix, so the published
+    copy of the manifest never silently loses an entry.
+    """
+    out: dict = {}
+    for rel, value in entries.items():
+        key = redact(str(rel))
+        if key in out:
+            suffix = 2
+            while f"{key}#{suffix}" in out:
+                suffix += 1
+            key = f"{key}#{suffix}"
+        out[key] = _mask_text(value)
+    return out
+
+
+def publishable(report: dict) -> dict:
+    """Copy of ``report`` with every target-derived string masked.
+
+    The report mixes two kinds of text: the tool's own vocabulary (check titles,
+    declared limits, the recommendations it wrote itself) and text read from the
+    target (frontmatter values, file names, symlink destinations, evidence, and
+    the reasons that quote a value). The second kind is what makes a raw report
+    unsafe to attach: a description, a version string or a symlink destination
+    can hold a credential, an address or a private host even when no privacy
+    finding fired.
+
+    Masking happens here, at export time, after every comparison and digest was
+    computed on raw values, so the integrity check keeps its exactness while the
+    exported report carries the mask. It is **not** a promise that the report is
+    safe to attach: only the formats in ``PRIVACY_PATTERNS`` are detected, so
+    free-form text and private names without a recognisable format survive
+    untouched. The report states that limit in its own ``publication`` block.
+
+    The technical manifest written by ``manifest --out`` is a different
+    artifact: it stays raw by design and is declared private, because masking it
+    would break the exact comparison it exists for.
+    """
+    out = dict(report)
+    for section in MASKED_TREES:
+        if isinstance(out.get(section), (dict, list)):
+            out[section] = _mask_text(out[section])
+    if out.get("manifest_unreadable"):
+        out["manifest_unreadable"] = [redact(str(rel)) for rel in out["manifest_unreadable"]]
+    manifest = out.get("manifest")
+    if isinstance(manifest, dict):
+        manifest = dict(manifest)
+        manifest["root"] = redact(str(manifest.get("root", "")))
+        manifest["unreadable"] = [redact(str(rel)) for rel in manifest.get("unreadable") or []]
+        manifest["walk_errors"] = _mask_text(manifest.get("walk_errors") or [])
+        manifest["entries"] = _mask_entry_map(manifest.get("entries") or {})
+        out["manifest"] = manifest
+    diff = out.get("manifest_diff")
+    if isinstance(diff, dict):
+        diff = dict(diff)
+        for key in ("added", "removed", "changed", "unverifiable"):
+            diff[key] = [redact(str(item)) for item in diff.get(key) or []]
+        diff["walk_errors"] = _mask_text(diff.get("walk_errors") or [])
+        out["manifest_diff"] = diff
+    for section in MASKED_RECORDS:
+        if isinstance(out.get(section), list):
+            out[section] = [_mask_text(item) for item in out[section]]
+    return out
+
+
+def publication_policy() -> dict:
+    """Which artifact of this tool may be published, and under which limit.
+
+    Two artifacts leave the auditor and they are not the same kind of file:
+
+    * the **report** (JSON and Markdown, ``audit``) is the one meant to be
+      shared. Every field read from the target is masked at export;
+    * the **manifest** (``manifest --out``) is a technical artifact, kept raw so
+      two manifests compare exactly. It declares itself ``private`` and must not
+      be attached to a PR, an issue or a chat.
+
+    Masking is not a safety guarantee: only the formats in
+    ``PRIVACY_PATTERNS`` are recognised, so free-form prose, private names and
+    paths without a credential shape survive. The block is exported so the
+    report states its own status instead of relying on prose elsewhere.
+    """
+    return {
+        "report_masked": True,
+        "report_safe_to_attach": False,
+        "report_limit": (
+            "campos lidos do alvo são mascarados no JSON e no Markdown, mas apenas "
+            "para formatos reconhecidos (credencial, e-mail, URL, host, IP, caminho "
+            "pessoal); texto livre, nomes privados sem formato e caminhos relativos "
+            "do alvo permanecem como estão, então o relatório exige revisão antes "
+            "de ser publicado"
+        ),
+        "manifest_raw": True,
+        "manifest_private": (
+            "o manifesto escrito por 'manifest --out' é técnico e não mascarado, "
+            "para que a comparação de integridade seja exata; não é publicável"
+        ),
+        "masking_primitive": "redact",
+    }
+
+
+def render_json(report: dict, *, mask: bool = True) -> str:
+    """Stable JSON: sorted keys, UTF-8 text, trailing newline.
+
+    ``mask`` is on by default, so the exported report is the masked one even if
+    a caller hands over a raw report. Only the technical manifest is exported
+    unmasked, and it says so in its own ``private`` field.
+    """
+    payload = publishable(report) if mask else report
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
 def _tri_state(value) -> str:
@@ -961,7 +1252,7 @@ def _tri_state(value) -> str:
         return "sim"
     if value is False:
         return "não"
-    return "inconclusivo (conteúdo inacessível)"
+    return "inconclusivo (cobertura incompleta)"
 
 
 def _cell(value) -> str:
@@ -969,8 +1260,15 @@ def _cell(value) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
-def render_markdown(report: dict) -> str:
-    """Human report in PT-BR, ordered worst finding first."""
+def render_markdown(report: dict, *, mask: bool = True) -> str:
+    """Human report in PT-BR, ordered worst finding first.
+
+    Masked by default for the same reason as :func:`render_json`: this is the
+    text people paste into a review, so it must not reproduce a raw value that
+    the JSON masks.
+    """
+    if mask:
+        report = publishable(report)
     lines: list[str] = []
     skill = report.get("skill", {})
     add = lines.append
@@ -981,7 +1279,8 @@ def render_markdown(report: dict) -> str:
     add(f"- Plataformas declaradas: {', '.join(skill.get('platforms') or []) or 'nenhuma'}")
     add(f"- Backend de frontmatter: {report.get('frontmatter_backend')}")
     add(f"- Manifesto do alvo: {report['manifest']['file_count']} arquivos, "
-        f"digest `{report['manifest']['digest'][:16]}...`")
+        f"digest `{report['manifest']['digest'][:16]}...`"
+        + ("" if report["manifest"].get("complete", True) else " (manifesto incompleto)"))
     add(f"- Alvo inalterado durante a auditoria: "
         f"{_tri_state(report.get('target_unchanged'))}")
     if report.get("reference_compared"):
@@ -994,6 +1293,12 @@ def render_markdown(report: dict) -> str:
     if unreadable:
         listed = ", ".join(f"`{rel}`" for rel in unreadable)
         add(f"- Sem conteúdo legível (não comparável): {len(unreadable)} arquivo(s): {listed}")
+    walk_errors = (report.get("manifest") or {}).get("walk_errors") or []
+    if walk_errors:
+        listed = ", ".join(f"`{item['rel']}` ({item['reason']})" for item in walk_errors)
+        add(f"- Diretórios não listados (travessia falhou): {len(walk_errors)}: {listed}")
+        add("- A cobertura está incompleta: os arquivos sob esses diretórios não "
+            "foram lidos nem comparados.")
     add(f"- Executado em: {report.get('generated_at')} (relógio: {report.get('clock')})")
     add("")
 
@@ -1068,6 +1373,11 @@ def render_markdown(report: dict) -> str:
             add(f"  - {reason}: {listed}")
     else:
         add("- Fora da leitura por sufixo: nenhum")
+    traversal = coverage.get("traversal_errors") or []
+    if traversal:
+        add(f"- Diretórios com travessia falha ({len(traversal)}):")
+        for item in traversal:
+            add(f"  - `{item['rel']}`: {item['reason']}")
     add("")
 
     add("## Verificações executadas")
@@ -1094,6 +1404,19 @@ def render_markdown(report: dict) -> str:
     for item in report.get("declared_limits", []):
         add(f"- {item}")
     add("")
+
+    publication = report.get("publication") or {}
+    if publication:
+        add("## Publicação deste relatório")
+        add("")
+        add("- Campos lidos do alvo (frontmatter, caminhos, destinos de link, "
+            "evidência, motivos que citam valores) são mascarados neste Markdown "
+            "e no JSON, pelo mesmo primitivo.")
+        add("- Pronto para anexar sem revisão: **não**. "
+            f"{publication.get('report_limit', '')}")
+        add(f"- O manifesto técnico de `manifest --out` continua bruto e privado: "
+            f"{publication.get('manifest_private', '')}")
+        add("")
 
     add("## Checklist semântico (avaliação pelo agente)")
     add("")

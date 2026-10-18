@@ -97,6 +97,10 @@ during the run and still differ from an older reference; that is a reference
 divergence (critical SQA-026, exit 1), not a change observed during the audit
 (exit 5). When a file cannot be read, both comparisons stay inconclusive
 (`null`, with `manifest_unreadable` naming it) instead of claiming "unchanged".
+A divergence that was actually read (different content, or an entry only one
+side has) still reports `false` even if another subtree could not be listed;
+a hole only makes an otherwise clean comparison inconclusive, because a missing
+entry inside it may be a traversal gap rather than a removal.
 `reference_compared` says whether the comparison happened at all: without
 `--check-unchanged` it is `false` and `matches_reference` is `null`, meaning "not
 compared", never "equal".

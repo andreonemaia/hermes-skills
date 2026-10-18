@@ -66,9 +66,14 @@ Três estados, nunca dois. `target_unchanged` e `matches_reference` podem ser
 
 - `true`: todos os arquivos foram lidos e os hashes coincidem;
 - `false`: houve diferença observada, com evidência no `manifest_diff`;
-- `null`: o conteúdo de algum arquivo não pôde ser lido. Nesse caso o relatório
-  traz `manifest_unreadable`, um item de limite e a frase "inconclusivo"; a
-  auditoria não afirma estabilidade nem alteração sem prova.
+- `null`: o conteúdo de algum arquivo não pôde ser lido, ou uma subárvore não
+  pôde ser listada. Nesse caso o relatório traz `manifest_unreadable` e/ou
+  `walk_errors`, um item de limite e a frase "inconclusivo"; a auditoria não
+  afirma estabilidade nem alteração sem prova. Diferença já observada em
+  arquivos lidos vence o buraco: um conteúdo alterado, ou uma entrada que só um
+  dos lados tem fora da subárvore ilegível, continua sendo `false`. Uma remoção
+  dentro da subárvore não listada não prova nada, porque a entrada pode ter
+  ficado de fora da travessia.
 
 O código de saída 5 só é emitido quando `target_unchanged` é `false`, isto é,
 quando a comparação antes/depois da própria execução observou diferença. Um

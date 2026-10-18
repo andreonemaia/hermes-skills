@@ -175,6 +175,23 @@ REPORT_LIMITS = (
 # --------------------------------------------------------------------------- ctx
 
 
+def _unique_walk_errors(errors: list[dict]) -> list[dict]:
+    """One record per (directory, reason), sorted: the same hole seen twice."""
+    unique: dict[tuple, dict] = {}
+    for item in errors:
+        unique.setdefault((item["rel"], item["reason"]), dict(item))
+    return [unique[key] for key in sorted(unique)]
+
+
+def _traversal_summary(errors: list[dict], limit: int = 5) -> str:
+    """Directory names of a traversal failure, capped so the reason stays short."""
+    rels = sorted({item["rel"] for item in errors})
+    shown = ", ".join(rels[:limit])
+    if len(rels) > limit:
+        shown += f" (+{len(rels) - limit})"
+    return shown
+
+
 class Context:
     """Read-only view of the audited target, with the text of its files cached."""
 
@@ -182,11 +199,14 @@ class Context:
         self.root = os.path.abspath(target)
         self.backend = backend
         self.name = os.path.basename(self.root)
-        self.entries = common.walk_target(self.root)
+        raw_errors: list[dict] = []
+        self.entries = common.walk_target(self.root, raw_errors)
         self.rels = {entry["rel"] for entry in self.entries}
         self.text_entries, self.excluded_files = common.text_files_with_exclusions(
-            self.root
+            self.root, raw_errors
         )
+        # Both walks hit the same locked directories; one hole is one hole.
+        self.walk_errors = _unique_walk_errors(raw_errors)
         self.coverage = {
             "text_files": [entry["rel"] for entry in self.text_entries],
             "skipped": [],
@@ -195,6 +215,11 @@ class Context:
                 entry["rel"] for entry in self.entries if entry["kind"] == "symlink"
             ],
             "entry_count": len(self.entries),
+            # A directory that could not be listed is a declared hole in the
+            # coverage: its files are neither scanned nor counted, and the
+            # report says so instead of presenting a shorter tree as the whole
+            # target.
+            "traversal_errors": [dict(item) for item in self.walk_errors],
         }
         self._excluded_rels = {item["rel"] for item in self.excluded_files}
         self._texts: dict[str, str | None] = {}
@@ -1034,13 +1059,9 @@ def _check_documented_commands(ctx: Context, code: str):
             )
         )
     parsers: dict[str, set[str] | None] = {}
-    seen_invocations: set[tuple[str, int, str]] = set()
+    seen_findings: set[tuple[str, int, str, str]] = set()
     for rel, number, raw, remainder in commands:
         target = raw[2:] if raw.startswith("./") else raw
-        if (rel, number, target) in seen_invocations:
-            # Two identical invocations on one line are one documented command.
-            continue
-        seen_invocations.add((rel, number, target))
         if target not in parsers:
             script_text = ctx.text(target) or ""
             found = set(SUBCOMMAND_RE.findall(script_text)) if "argparse" in script_text else set()
@@ -1051,6 +1072,14 @@ def _check_documented_commands(ctx: Context, code: str):
         bad = _first_bad_subcommand(remainder, subcommands)
         if bad is None:
             continue
+        # The key is the finding, not the invocation: `cli.py audit` and
+        # `cli.py nonexistent` on one line are two claims and both are checked.
+        # The same bad argument repeated on that line is one finding, however
+        # the surrounding prose differs, so the report does not list it twice.
+        signature = (rel, number, target, bad)
+        if signature in seen_findings:
+            continue
+        seen_findings.add(signature)
         findings.append(
             common.finding(
                 code,
@@ -1234,9 +1263,17 @@ def _privacy_scan(ctx: Context):
                         domain = (match.group(2) or "").lower()
                         if domain in common.GENERIC_DOMAINS:
                             continue
-                    if cls == "credential_assignment" and common.is_code_expression(value):
-                        # ``token = marker.group(1)`` is source code, not a secret.
-                        continue
+                    if cls == "credential_assignment":
+                        # The pattern's optional quote sits outside the capture,
+                        # so the captured text alone cannot tell
+                        # ``token = marker.group(1)`` (source code) from
+                        # ``password = 'marker.group(1)'`` (a quoted literal).
+                        # The character just before the span keeps that
+                        # context: inside quotes the value is data, whatever it
+                        # looks like. Nothing is evaluated either way.
+                        quoted = match.start(1) > 0 and line[match.start(1) - 1] in "\"'"
+                        if not quoted and common.is_code_expression(value):
+                            continue
                     if cls == "national_id" and common.is_repeated_pattern(value):
                         # ``000.000.000-00`` documents the format, it is not a person.
                         continue
@@ -1612,9 +1649,19 @@ def audit_target(
     if reference_manifest:
         reference = common.load_manifest(reference_manifest)
         diff = common.diff_manifests(reference, manifest_before)
-        if diff["identical"] and diff["complete"]:
-            reference_ok = True
-        elif not diff["identical"]:
+        holes = [str(item.get("rel") or "") for item in diff["walk_errors"]]
+        unknown_hole = any(not rel or rel == common.UNKNOWN_PATH for rel in holes)
+        # A removed entry may simply be inside a subtree that could not be
+        # listed, so it is only a proven divergence when no hole explains it.
+        unexplained_removed = [
+            rel
+            for rel in diff["removed"]
+            if not unknown_hole
+            and not any(rel == hole or rel.startswith(hole + "/") for hole in holes)
+        ]
+        if diff["changed"] or diff["added"] or unexplained_removed:
+            # Read entries that differ, or entries only the target has, are a
+            # divergence even when another subtree could not be listed.
             reference_ok = False
             findings.append(
                 _integrity_finding(
@@ -1624,6 +1671,27 @@ def audit_target(
                     diff,
                 )
             )
+        elif diff["walk_errors"]:
+            # A subtree that could not be listed makes the comparison
+            # inconclusive: the entries that are missing may be missing from the
+            # traversal, not from the target.
+            reference_ok = None
+            limits.append(
+                common.limit(
+                    INTEGRITY_CODE,
+                    file=".",
+                    line=None,
+                    reason=(
+                        "o manifesto de referência não pôde ser confirmado: a travessia do "
+                        f"alvo falhou em diretório(s) {_traversal_summary(diff['walk_errors'])}"
+                    ),
+                    recommendation=(
+                        "garantir permissão de leitura nos diretórios listados e repetir a comparação"
+                    ),
+                )
+            )
+        elif diff["identical"] and diff["complete"]:
+            reference_ok = True
         else:
             # Same comparable entries, but some content could not be hashed.
             reference_ok = None
@@ -1660,11 +1728,16 @@ def audit_target(
 
     manifest_after = common.build_manifest(ctx.root)
     run_diff = common.diff_manifests(manifest_before, manifest_after)
+    traversal = _unique_walk_errors(
+        list(manifest_before.get("walk_errors") or [])
+        + list(manifest_after.get("walk_errors") or [])
+    )
     # Three states: True (verified stable), False (verified change), None
-    # (content unreadable, so stability cannot be claimed).
+    # (coverage incomplete, so stability cannot be claimed). A traversal hole is
+    # enough on its own: content that was never listed was never compared.
     if not run_diff["identical"]:
         unchanged: bool | None = False
-    elif run_diff["unverifiable"]:
+    elif run_diff["unverifiable"] or traversal:
         unchanged = None
     else:
         unchanged = True
@@ -1696,7 +1769,27 @@ def audit_target(
                 ),
             )
         )
-    if run_diff["identical"] and not run_diff["unverifiable"]:
+    if traversal:
+        # The files under a directory that could not be listed are absent from
+        # both manifests, so "identical" would be true about a smaller tree than
+        # the target. The limit names the hole instead of hiding it.
+        limits.append(
+            common.limit(
+                INTEGRITY_CODE,
+                file=".",
+                line=None,
+                reason=(
+                    "travessia incompleta em "
+                    f"{len({item['rel'] for item in traversal})} diretório(s) "
+                    f"({_traversal_summary(traversal)}): os arquivos ali não foram "
+                    "listados nem comparados"
+                ),
+                recommendation=(
+                    "garantir permissão de leitura nos diretórios listados e repetir a auditoria"
+                ),
+            )
+        )
+    if run_diff["identical"] and not run_diff["unverifiable"] and not traversal:
         integrity_reason = (
             f"manifesto idêntico antes e depois ({manifest_after['file_count']} arquivos)"
         )
@@ -1705,6 +1798,11 @@ def audit_target(
             "manifesto idêntico nos arquivos comparáveis; "
             f"{len(run_diff['unverifiable'])} arquivo(s) sem conteúdo legível"
         )
+        if traversal:
+            integrity_reason += (
+                "; travessia incompleta em "
+                f"{len({item['rel'] for item in traversal})} diretório(s)"
+            )
     else:
         integrity_reason = "manifesto divergente: alvo alterado durante a auditoria"
     if reference_ok is False:
@@ -1714,8 +1812,8 @@ def audit_target(
         )
     elif reference_compared and reference_ok is None:
         integrity_reason += (
-            "; o manifesto de referência não pôde ser confirmado por conteúdo "
-            "ilegível"
+            "; o manifesto de referência não pôde ser confirmado: cobertura "
+            "insuficiente (conteúdo ilegível ou travessia incompleta)"
         )
     checks_run.append(
         {
@@ -1762,6 +1860,21 @@ def audit_target(
             "excluded_dirs": manifest_before["excluded_dirs"],
             "excluded_names": manifest_before["excluded_names"],
             "excluded_suffixes": manifest_before["excluded_suffixes"],
+            # Completeness of the tree the digest covers: a manifest built over
+            # a tree with a hole, or over files it could not read, is still a
+            # digest, but not of the whole target. ``walk_errors`` above is the
+            # union of both passes, so ``complete`` must be too, or the copy
+            # would claim full coverage while listing holes.
+            "complete": manifest_before["complete"] and manifest_after["complete"],
+            "unreadable": sorted(
+                {str(item) for item in manifest_before["unreadable"]}
+                | {str(item) for item in manifest_after.get("unreadable", [])}
+            ),
+            "walk_errors": [dict(item) for item in traversal],
+            # The same manifest the ``manifest`` command writes raw. Here it is
+            # masked and travels inside the report, so it must not claim to be
+            # the private artifact.
+            "private": False,
         },
         "manifest_after_digest": manifest_after["digest"],
         "manifest_diff": run_diff,
@@ -1770,6 +1883,7 @@ def audit_target(
         "reference_compared": reference_compared,
         "target_unchanged": unchanged,
         "coverage": ctx.coverage,
+        "publication": common.publication_policy(),
         "findings": findings,
         "limits": limits,
         "reported_only": reported,
@@ -1822,7 +1936,10 @@ def _cmd_manifest(args) -> int:
             f"alvo inexistente ou não é diretório: {args.target}"
         )
     manifest = common.build_manifest(args.target)
-    text = common.render_json(manifest)
+    # Unmasked on purpose: this is the technical artifact, and its exact
+    # comparison against a later run is the whole point. It declares itself
+    # ``private`` so nothing mistakes it for the publishable report.
+    text = common.render_json(manifest, mask=False)
     if args.out:
         out = common.resolve_out(args.out, args.target)
         common.write_output(out, text)
