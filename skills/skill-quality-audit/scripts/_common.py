@@ -51,6 +51,13 @@ EXIT_INTERNAL = 6
 
 MAX_EVIDENCE = 200
 REDACTED = "[redacted]"
+#: Largest file decoded as text. A bigger one is declared ``oversized`` instead
+#: of being read whole: the target is untrusted input and the read must not be
+#: the reason the auditor dies without a report.
+MAX_TEXT_BYTES = 8 * 1024 * 1024
+#: States that mean "the file is there but its content is unavailable". They
+#: are reported as coverage, never collapsed into "missing".
+UNREADABLE_STATES = ("unreadable", "binary", "oversized", "undecodable")
 
 #: Paths never walked, never hashed and never scanned. Declared in the report so
 #: the coverage of both the manifest and the privacy scan stays explicit.
@@ -288,13 +295,17 @@ class UsageArgumentParser(argparse.ArgumentParser):
 
 
 def now_ts() -> float:
-    """Current timestamp, or the ``SQA_NOW`` override used by the test suite."""
+    """Current timestamp, or the ``SQA_NOW`` override used by the test suite.
+
+    A malformed override is refused instead of ignored: silently falling back to
+    the wall clock makes a hermetic test pass while measuring the wrong thing.
+    """
     raw = os.environ.get("SQA_NOW")
     if raw:
         try:
             return float(raw)
-        except ValueError:
-            pass
+        except ValueError as exc:
+            raise UsageError(f"SQA_NOW inválido: {raw!r}") from exc
     return datetime.datetime.now(datetime.timezone.utc).timestamp()
 
 
@@ -535,14 +546,20 @@ def read_text(path: str) -> str | None:
 def read_text_state(path: str) -> tuple[str | None, str]:
     """Decode a text file and report *why* it could not be decoded.
 
-    States: ``ok``, ``unreadable`` (OSError), ``binary`` (NUL byte) and
-    ``undecodable`` (no supported encoding). Callers that only need the text use
+    States: ``ok``, ``unreadable`` (OSError), ``binary`` (NUL byte),
+    ``oversized`` (above :data:`MAX_TEXT_BYTES`) and ``undecodable`` (no
+    supported encoding). Callers that only need the text use
     :func:`read_text`; callers that report coverage use the state so that "the
     file is missing" and "the file is there but unreadable" never collapse into
     the same finding.
     """
     try:
         with open(path, "rb") as handle:
+            # Read is bounded on purpose: a text-looking file inside the target
+            # is attacker-controlled input, and decoding it whole turns a large
+            # file into an out-of-memory exit 6 with no report.
+            if os.fstat(handle.fileno()).st_size > MAX_TEXT_BYTES:
+                return None, "oversized"
             raw = handle.read()
     except OSError:
         return None, "unreadable"
@@ -1017,6 +1034,9 @@ def _parse_restricted(raw: str) -> dict:
         # parent's name (``name:`` then ``  name: x``) is not a duplicate.
         marker = (tuple(path for level, path in stack if level < indent), key)
         if marker in seen:
+            # Last wins, as in YAML: the earlier block is discarded. The record
+            # below is what tells the caller the parsed mapping cannot be
+            # trusted for this key, so the loss is declared, not silent.
             unsupported.append({"line": line_no, "construct": "duplicate_key", "key": key})
         seen.add(marker)
 

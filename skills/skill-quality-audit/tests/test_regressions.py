@@ -313,6 +313,19 @@ class HardeningTest(unittest.TestCase):
             self.assertEqual(code, support.common.EXIT_INTERNAL)
             self.assertIn("interno", err.getvalue())
 
+    def test_a_malformed_clock_override_is_refused(self):
+        # Falling back to the wall clock on a typo would make a "frozen" report
+        # carry a real timestamp without saying so.
+        with mock.patch.dict("os.environ", {"SQA_NOW": "ontem"}):
+            with self.assertRaises(support.common.UsageError) as caught:
+                support.common.now_ts()
+        self.assertIn("SQA_NOW", str(caught.exception))
+
+    def test_a_valid_clock_override_is_used_as_is(self):
+        with mock.patch.dict("os.environ", {"SQA_NOW": "1700000000"}):
+            self.assertEqual(support.common.now_ts(), 1700000000.0)
+            self.assertEqual(support.common.clock_source(), "SQA_NOW")
+
 
 if __name__ == "__main__":
     unittest.main()

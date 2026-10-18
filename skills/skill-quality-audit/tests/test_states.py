@@ -97,6 +97,19 @@ class TextStateTest(unittest.TestCase):
         self.assertIsNone(text)
         self.assertEqual(state, "undecodable")
 
+    def test_oversized_file_is_declared_instead_of_read(self):
+        # The read is bounded: a text-looking file above the cap must become a
+        # declared coverage gap, not an out-of-memory exit 6.
+        (self.root / "grande.md").write_text("x" * 200, encoding="utf-8")
+        ctx = Context(str(self.root))
+        with mock.patch.object(support.common, "MAX_TEXT_BYTES", 64):
+            text, state = ctx.text_state("grande.md")
+        self.assertIsNone(text)
+        self.assertEqual(state, "oversized")
+        self.assertIn(
+            {"rel": "grande.md", "reason": "oversized"}, ctx.coverage["skipped"]
+        )
+
     def test_text_helper_matches_state(self):
         self.assertIsNone(self.ctx.text("NAO_EXISTE.md"))
         self.assertIsNotNone(self.ctx.text("README.md"))

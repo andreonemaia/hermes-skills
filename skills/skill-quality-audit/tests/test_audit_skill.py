@@ -223,6 +223,43 @@ class CliTest(unittest.TestCase):
             self.assertIn("dentro do alvo", err)
             self.assertFalse((root / "relatorio.json").exists())
 
+    def test_relative_output_is_resolved_before_the_target_check(self):
+        # ``--out relatorio.json`` with the process inside the target is the
+        # same file as the absolute spelling; comparing raw strings let it pass.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            with support.working_directory(root):
+                code, _, err = self._run(
+                    ["audit", "--target", ".", "--out", "relatorio.json"]
+                )
+            self.assertEqual(code, support.common.EXIT_USAGE, err)
+            self.assertIn("dentro do alvo", err)
+            self.assertFalse((root / "relatorio.json").exists())
+
+    def test_output_reaching_the_target_through_parent_traversal_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            escaped = root / ".." / root.name / "relatorio.json"
+            code, _, err = self._run(
+                ["audit", "--target", str(root), "--out", str(escaped)]
+            )
+            self.assertEqual(code, support.common.EXIT_USAGE, err)
+            self.assertFalse((root / "relatorio.json").exists())
+
+    def test_output_through_a_link_into_the_target_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            link = pathlib.Path(tmp) / "atalho"
+            try:
+                link.symlink_to(root, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"links não disponíveis neste sistema: {exc}")
+            code, _, err = self._run(
+                ["audit", "--target", str(root), "--out", str(link / "relatorio.json")]
+            )
+            self.assertEqual(code, support.common.EXIT_USAGE, err)
+            self.assertFalse((root / "relatorio.json").exists())
+
     def test_unwritable_output_exits_four(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = support.build_skill(tmp)

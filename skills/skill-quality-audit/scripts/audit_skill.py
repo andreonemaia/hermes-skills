@@ -244,10 +244,11 @@ class Context:
     def text_state(self, rel: str) -> tuple[str | None, str]:
         """Text of one target file plus why it is unavailable.
 
-        States: ``ok``, ``missing`` (no such entry), ``not_a_file``,
-        ``unreadable``, ``binary`` and ``undecodable``. Callers that only need
-        the text use :meth:`text`; callers that report a defect use the state so
-        a missing file and a file that exists but cannot be read stay distinct.
+        States: ``ok``, ``missing`` (no such entry), ``not_a_file``, and the
+        states in :data:`common.UNREADABLE_STATES` (``unreadable``, ``binary``,
+        ``oversized``, ``undecodable``). Callers that only need the text use
+        :meth:`text`; callers that report a defect use the state so a missing
+        file and a file that exists but cannot be read stay distinct.
         """
         if rel in self._states:
             return self._texts.get(rel), self._states[rel]
@@ -263,7 +264,7 @@ class Context:
         # A file already declared as excluded by suffix is not counted twice:
         # "skipped" means "present, tried, unreadable", not "outside the scan".
         already_excluded = rel in self._excluded_rels
-        if state in ("unreadable", "binary", "undecodable") and not already_excluded:
+        if state in common.UNREADABLE_STATES and not already_excluded:
             self.coverage["skipped"].append({"rel": rel, "reason": state})
         return value, state
 
@@ -449,7 +450,7 @@ def _documented_paths(ctx: Context):
 
 def _check_skill_md(ctx: Context, code: str):
     text, state = ctx.text_state("SKILL.md")
-    if text is None and state in ("unreadable", "binary", "undecodable"):
+    if text is None and state in common.UNREADABLE_STATES:
         return result(
             "executed",
             f"SKILL.md presente mas não legível ({state})",
@@ -750,7 +751,7 @@ def _check_platforms(ctx: Context, code: str):
 
 def _check_readme(ctx: Context, code: str):
     text, state = ctx.text_state("README.md")
-    if text is None and state in ("unreadable", "binary", "undecodable"):
+    if text is None and state in common.UNREADABLE_STATES:
         return result(
             "executed",
             f"README.md presente mas não legível ({state})",
