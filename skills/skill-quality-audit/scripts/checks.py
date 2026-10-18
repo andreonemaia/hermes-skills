@@ -36,6 +36,9 @@ METHODS = ("structural", "semantic")
 #: that comes from the audited documents only, ``unverifiable`` marks an item the
 #: available evidence cannot settle. Neither is an approval nor a defect.
 VALIDATION_STATES = ("executed", "reported", "unverifiable", "not_run")
+#: Confidence of a finding: observed in the target or only a signal that needs
+#: the agent to confirm it.
+VALID_CONFIDENCE = ("confirmed", "signal")
 
 CATEGORIES = (
     "structure",
@@ -89,8 +92,8 @@ CATALOGUE: tuple[Check, ...] = (
         category="metadata",
         method="structural",
         default_severity="critical",
-        summary="SKILL.md não começa com um bloco de frontmatter delimitado por ---.",
-        how="_check_frontmatter: procura o bloco delimitado na primeira linha de SKILL.md.",
+        summary="SKILL.md não começa com a linha --- que abre o bloco de frontmatter.",
+        how="_check_frontmatter: procura a linha de abertura do bloco na primeira linha de SKILL.md.",
         limits="Não avalia o conteúdo semântico do frontmatter, apenas a existência do bloco.",
     ),
     Check(
@@ -100,7 +103,7 @@ CATALOGUE: tuple[Check, ...] = (
         method="structural",
         default_severity="high",
         summary="O bloco de frontmatter existe mas não pôde ser decodificado pelo backend ativo.",
-        how="_check_frontmatter: erro de parse com o backend pyyaml, ou bloco sem par de delimitadores.",
+        how="_check_frontmatter: abertura presente sem linha de fechamento, ou erro de parse com o backend pyyaml.",
         limits="Com o backend restrito, construções fora da cobertura declarada viram SQA-027 em vez de erro.",
     ),
     Check(

@@ -32,7 +32,7 @@ Standard library only.
 
 from __future__ import annotations
 
-import argparse
+import json
 import os
 import re
 import sys
@@ -43,12 +43,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _common as common  # noqa: E402
 from checks import (  # noqa: E402
     CATALOGUE,
-    SCHEMA_ID,
-    SCHEMA_VERSION,
     SEVERITIES,
     at_least,
-    codes,
-    structural_codes,
 )
 
 TOOL_NAME = "skill-quality-audit"
@@ -336,11 +332,19 @@ class Context:
     def frontmatter_data(self) -> dict:
         """Parsed frontmatter of SKILL.md, reading it once."""
         if self.frontmatter is None:
-            text = self.skill_md_text
+            text, state = self.text_state("SKILL.md")
             if text is None:
+                # A file that exists but cannot be read is not an absent
+                # entry point: reporting it as missing would hide the defect
+                # behind the wrong remediation.
+                unreadable = state in common.UNREADABLE_STATES
                 self.frontmatter = {
-                    "status": "missing",
-                    "reason": "SKILL.md ausente",
+                    "status": "unreadable" if unreadable else "missing",
+                    "reason": (
+                        f"SKILL.md presente mas não legível ({state})"
+                        if unreadable
+                        else "SKILL.md ausente"
+                    ),
                     "backend": self.backend,
                     "data": {},
                     "unsupported": [],
@@ -516,6 +520,12 @@ def _check_skill_md(ctx: Context, code: str):
 
 def _check_frontmatter(ctx: Context, code: str):
     if ctx.skill_md_text is None:
+        _text, state = ctx.text_state("SKILL.md")
+        if state in common.UNREADABLE_STATES:
+            return result(
+                "not_run",
+                f"SKILL.md ilegível ({state}): frontmatter não avaliado",
+            )
         return result("not_run", "SKILL.md ausente: frontmatter não avaliado")
     parsed = ctx.frontmatter_data()
     if parsed["status"] == "missing":
@@ -754,15 +764,16 @@ def _check_platforms(ctx: Context, code: str):
         return result("not_run", "platforms ausente ou vazio: nada a validar")
     unknown = [item for item in platforms if item.lower() not in common.KNOWN_PLATFORMS]
     if unknown:
+        shown = ", ".join(_sanitise(item) for item in unknown)
         return result(
             "executed",
-            f"plataformas não reconhecidas: {', '.join(unknown)}",
+            f"plataformas não reconhecidas: {shown}",
             findings=[
                 common.finding(
                     code,
                     file="SKILL.md",
                     line=None,
-                    evidence=f"platforms contém tokens não reconhecidos: {', '.join(unknown)}",
+                    evidence=f"platforms contém tokens não reconhecidos: {shown}",
                     impact="tokens fora do conjunto aceito não restringem nem informam o carregamento",
                     recommendation=f"usar apenas {', '.join(common.KNOWN_PLATFORMS)}",
                     severity_justification="declaração inválida pode levar o agente a assumir compatibilidade inexistente",
@@ -847,8 +858,11 @@ def _check_examples(ctx: Context, code: str):
         if text is None:
             continue
         lines = text.splitlines()
+        # A heading inside a fence is an example of a heading, not a section
+        # of the document: it must not be read as declaring an example.
+        outside = {number for number, _line in _lines_outside_fences(text)}
         for index, line in enumerate(lines):
-            if not EXAMPLE_HEADING_RE.match(line):
+            if (index + 1) not in outside or not EXAMPLE_HEADING_RE.match(line):
                 continue
             window = lines[index + 1 : index + 9]
             fence: str | None = None
@@ -1927,8 +1941,10 @@ def audit_target(
             "code": INTEGRITY_CODE,
             "method": "structural",
             "status": (
-                "executed"
-                if run_diff["identical"] and reference_ok is not False
+                "unverifiable"
+                if reference_compared and reference_ok is None
+                else "executed"
+                if run_diff["proven_same"] and reference_ok is not False
                 else "executed_with_findings"
             ),
             "reason": integrity_reason,

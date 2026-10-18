@@ -227,10 +227,10 @@ gravados fora dos alvos.
 
 | Alvo | Arquivos | Digest do manifesto | Achados | Código de saída |
 |---|---|---|---|---|
-| `independent-code-review` | 3 | `e7dd6f9f6b19…` | 7 (SQA-006, SQA-014, SQA-025 ×5) | 0 |
-| `comfyui-model-manager` | 7 | `4fb12699ce5f…` | 3 (SQA-006, SQA-014, SQA-025) | 0 |
-| `task-checkpoint-recovery` | 11 | `bbab28ec402b…` | 7 (SQA-018, SQA-019 ×2, SQA-020 ×2, SQA-025 ×2) | 1 |
-| `skill-execution-report` | 14 | `fdc8481e0aed…` | 34 (SQA-014, SQA-019 ×2, SQA-020 ×2, SQA-021 ×24, SQA-025 ×5) | 1 |
+| `independent-code-review` | 4 | `e7dd6f9f6b19…` | 7 (SQA-006, SQA-014, SQA-025 ×5) | 0 |
+| `comfyui-model-manager` | 9 | `4fb12699ce5f…` | 3 (SQA-006, SQA-014, SQA-025) | 0 |
+| `task-checkpoint-recovery` | 14 | `bbab28ec402b…` | 7 (SQA-018, SQA-019 ×2, SQA-020 ×2, SQA-025 ×2) | 1 |
+| `skill-execution-report` | 17 | `fdc8481e0aed…` | 36 (SQA-014, SQA-019 ×2, SQA-020 ×4, SQA-021 ×24, SQA-025 ×5) | 1 |
 
 Cada alvo também foi reauditado com `--check-unchanged` contra um manifesto
 gerado antes: nenhuma execução produziu achado de integridade, e os códigos de
@@ -238,6 +238,12 @@ saída ficaram em 0, 0, 1 e 1, os mesmos da auditoria sem manifesto. O 1 vem do
 `--fail-on high` padrão, não da checagem de integridade. Os dois alvos com
 código 1 têm achado em severidade `high` ou maior; os dois com código 0 têm
 apenas `medium`, abaixo do padrão de `--fail-on`.
+
+SQA-014 é `high` por padrão no catálogo. Nos dois alvos com código 0 ele
+aparece rebaixado para `medium`, e o rebaixamento é explícito no próprio
+achado: `severity_justification` registra que a referência externa funciona
+dentro do repositório e quebra apenas em uma cópia isolada da skill. Sem esse
+rebaixamento declarado, o código de saída seria 1.
 
 O piloto não corrigiu nenhuma das quatro skills. Os achados ficam registrados
 como estão, para que cada autora decida o que fazer com eles.

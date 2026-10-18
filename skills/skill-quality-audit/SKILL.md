@@ -244,6 +244,7 @@ python scripts/audit_skill.py audit --target ../minha-skill \
 ```
 
 A sanitized excerpt of the resulting report is in
-`references/example-report.md`: one confirmed documentation finding, one privacy
-signal from a test file that keeps `critical` severity, one check that did not
-run, and the coverage block. No value from the audited target appears in it.
+`references/example-report.md`: one confirmed platform-claim finding (SQA-018),
+one privacy signal from a test file that keeps `critical` severity, one check
+that did not run, and the coverage block. No value from the audited target
+appears in it.

@@ -14,6 +14,11 @@ python scripts/audit_skill.py audit --target ../alvo \
 
 ## Resultado
 
+Recorte de um relatório maior: `text_files` lista só parte das entradas,
+`findings` traz 2 dos 7 achados e `checks_run` traz 2 das verificações. Os
+números de `entry_count` e `summary` são do relatório completo, não da lista
+exibida.
+
 ```json
 {
   "target": "../alvo",
@@ -48,8 +53,8 @@ python scripts/audit_skill.py audit --target ../alvo \
       "SKILL.md",
       "references/schema.md",
       "scripts/_common.py",
-      "scripts/checkpoint.py",
-      "tests/test_hardening.py"
+      "scripts/<módulo>.py",
+      "tests/test_<área>.py"
     ]
   },
   "publication": {

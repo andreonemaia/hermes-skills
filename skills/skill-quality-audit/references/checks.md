@@ -8,7 +8,7 @@
 | código | método | severidade padrão | título |
 | --- | --- | --- | --- |
 | SQA-001 | structural | critical | O diretório do alvo não contém SKILL.md, portanto não é uma skill publicável. |
-| SQA-002 | structural | critical | SKILL.md não começa com um bloco de frontmatter delimitado por ---. |
+| SQA-002 | structural | critical | SKILL.md não começa com a linha --- que abre o bloco de frontmatter. |
 | SQA-003 | structural | high | O bloco de frontmatter existe mas não pôde ser decodificado pelo backend ativo. |
 | SQA-004 | structural | critical | Falta name, description, version ou platforms no frontmatter. |
 | SQA-005 | structural | critical | O campo name do frontmatter não corresponde ao nome do diretório da skill. |
@@ -54,12 +54,12 @@ Executadas por `python scripts/audit_skill.py audit --target <skill>`; cada resu
 - como: _check_skill_md em scripts/audit_skill.py: presença de SKILL.md na raiz do alvo.
 - limites: Um SKILL.md presente não prova que a skill funciona; apenas que o ponto de entrada existe.
 
-### SQA-002 — SKILL.md não começa com um bloco de frontmatter delimitado por ---.
+### SQA-002 — SKILL.md não começa com a linha --- que abre o bloco de frontmatter.
 
 - categoria: metadata
 - severidade padrão: critical
-- o que verifica: SKILL.md não começa com um bloco de frontmatter delimitado por ---.
-- como: _check_frontmatter: procura o bloco delimitado na primeira linha de SKILL.md.
+- o que verifica: SKILL.md não começa com a linha --- que abre o bloco de frontmatter.
+- como: _check_frontmatter: procura a linha de abertura do bloco na primeira linha de SKILL.md.
 - limites: Não avalia o conteúdo semântico do frontmatter, apenas a existência do bloco.
 
 ### SQA-003 — O bloco de frontmatter existe mas não pôde ser decodificado pelo backend ativo.
@@ -67,7 +67,7 @@ Executadas por `python scripts/audit_skill.py audit --target <skill>`; cada resu
 - categoria: metadata
 - severidade padrão: high
 - o que verifica: O bloco de frontmatter existe mas não pôde ser decodificado pelo backend ativo.
-- como: _check_frontmatter: erro de parse com o backend pyyaml, ou bloco sem par de delimitadores.
+- como: _check_frontmatter: abertura presente sem linha de fechamento, ou erro de parse com o backend pyyaml.
 - limites: Com o backend restrito, construções fora da cobertura declarada viram SQA-027 em vez de erro.
 
 ### SQA-004 — Falta name, description, version ou platforms no frontmatter.

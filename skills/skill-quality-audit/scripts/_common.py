@@ -27,6 +27,7 @@ from checks import (
     SCHEMA_VERSION,
     SEVERITIES,
     SEVERITY_ORDER,
+    VALID_CONFIDENCE,
     VALIDATION_STATES,
     by_code,
     worst_severity,
@@ -571,7 +572,10 @@ def read_text_state(path: str) -> tuple[str | None, str]:
             raw = handle.read()
     except OSError:
         return None, "unreadable"
-    if b"\x00" in raw[:4096]:
+    # Scan the whole buffer, not just the head: a file with a NUL byte after
+    # the first 4 KiB is binary all the same, and a partial scan would decode
+    # it and report text that the target does not actually contain.
+    if b"\x00" in raw:
         return None, "binary"
     # ``utf-8-sig`` first: it decodes BOM-less UTF-8 as well, and strips the
     # BOM when present, so no file silently keeps ``\ufeff`` in its text.
@@ -781,6 +785,11 @@ def diff_manifests(before: dict, after: dict) -> dict:
     ``unconfirmed_removed``. ``identical`` only speaks about the entries that
     could be compared, and ``proven_same`` is the single flag both the
     reference comparison and the run comparison read before claiming agreement.
+
+    An unreadable entry stays unverifiable even when its size differs: without
+    a digest the content is unknown, and promoting the size delta to a change
+    would assert a difference that was never read. The entry is named in
+    ``unverifiable``, which is what makes ``complete`` false.
     """
     old, new = before.get("entries", {}), after.get("entries", {})
     holes_before = hole_paths(before)
@@ -835,9 +844,11 @@ def diff_manifests(before: dict, after: dict) -> dict:
             or unreadable
             or walk_errors
         ),
-        "complete": not unreadable
-        and not walk_errors
-        and not (added or removed or unconfirmed_added or unconfirmed_removed),
+        # Coverage only: ``complete`` says the two passes saw the whole tree
+        # and every compared content could be read. A proven addition or
+        # removal is a result, not a hole, so it does not falsify coverage;
+        # ``proven_same`` is the flag that answers "no difference at all".
+        "complete": not unreadable and not walk_errors,
         "digest_before": before.get("digest"),
         "digest_after": after.get("digest"),
     }
@@ -1102,9 +1113,18 @@ def _parse_restricted(raw: str) -> dict:
 
 def _strip_comment(value: str) -> str:
     quote = None
+    escaped = False
     for position, char in enumerate(value):
+        if escaped:
+            # A backslash inside a quoted scalar escapes the next character;
+            # without this, an escaped quote would close the string and the
+            # ``#`` after it would be read as a comment.
+            escaped = False
+            continue
         if quote:
-            if char == quote:
+            if char == "\\":
+                escaped = True
+            elif char == quote:
                 quote = None
             continue
         if char in "\"'":
@@ -1291,6 +1311,8 @@ def finding(
     chosen = severity or check.default_severity
     if chosen not in SEVERITY_ORDER:
         raise UsageError(f"severidade inválida: {chosen}")
+    if confidence not in VALID_CONFIDENCE:
+        raise UsageError(f"confiança inválida: {confidence}")
     if len(evidence) > MAX_EVIDENCE:
         evidence = evidence[: MAX_EVIDENCE - 3] + "..."
     location = f"{file}:{line}" if line else file
@@ -1386,26 +1408,34 @@ def _mask_text(node):
         # instead of letting the raw value through.
         return [_mask_text(item) for item in node]
     if isinstance(node, dict):
-        return {redact(str(key)): _mask_text(value) for key, value in node.items()}
+        masked: dict = {}
+        for key, value in node.items():
+            masked[_masked_key(key, masked)] = _mask_text(value)
+        return masked
     return node
 
 
-def _mask_entry_map(entries: dict) -> dict:
-    """Mask entry paths, keeping one entry per raw path.
+def _masked_key(key: object, taken: dict) -> str:
+    """Mask a dictionary key without letting two keys collapse into one.
 
-    Two paths that differ only inside a masked value collapse into the same
-    key. The second one keeps its place under a numeric suffix, so the published
-    copy of the manifest never silently loses an entry.
+    Two raw keys that differ only inside a masked value redact to the same
+    text; the second keeps its place under a numeric suffix, so masking never
+    silently drops an entry.
     """
+    text = redact(str(key))
+    if text in taken:
+        suffix = 2
+        while f"{text}#{suffix}" in taken:
+            suffix += 1
+        text = f"{text}#{suffix}"
+    return text
+
+
+def _mask_entry_map(entries: dict) -> dict:
+    """Mask entry paths, keeping one entry per raw path."""
     out: dict = {}
     for rel, value in entries.items():
-        key = redact(str(rel))
-        if key in out:
-            suffix = 2
-            while f"{key}#{suffix}" in out:
-                suffix += 1
-            key = f"{key}#{suffix}"
-        out[key] = _mask_text(value)
+        out[_masked_key(rel, out)] = _mask_text(value)
     return out
 
 

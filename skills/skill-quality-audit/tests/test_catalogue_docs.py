@@ -209,7 +209,11 @@ class DocumentedExampleTest(unittest.TestCase):
         # the field itself.
         documented = set(re.findall(r"`([a-z]+)`", line.split("catálogo:", 1)[1]))
         emitted = {check.category for check in support.checks.CATALOGUE}
+        # Both directions matter: a documented category the tool never emits
+        # describes a check that does not exist, and an emitted category missing
+        # from the table leaves the format undocumented.
         self.assertEqual(documented - emitted, set())
+        self.assertEqual(emitted - documented, set())
 
     def test_examples_cite_real_check_titles(self):
         # A finding copied from a report carries ``id`` and ``check`` together;
@@ -225,6 +229,9 @@ class DocumentedExampleTest(unittest.TestCase):
 
     def test_documented_exit_codes_match_the_constants(self):
         text = self._references("finding-format.md").split("## Códigos de saída", 1)[1]
+        # Stop at the next section: a later table of single digits would
+        # otherwise be read as more exit codes.
+        text = text.split("\n## ", 1)[0]
         documented = [int(code) for code in re.findall(r"^\|\s*(\d)\s*\|", text, re.M)]
         constants = [
             support.common.EXIT_OK,

@@ -177,6 +177,9 @@ class NotComparedTest(unittest.TestCase):
             ][0]
             self.assertNotIn("referência", integrity["reason"])
             self.assertNotIn("ilegível", integrity["reason"])
+            # No reference was requested, so the integrity check ran and is not
+            # "unverifiable": only an incomplete comparison may say that.
+            self.assertEqual(integrity["status"], "executed")
             markdown = support.common.render_markdown(report)
             self.assertIn("não comparado", markdown)
 
