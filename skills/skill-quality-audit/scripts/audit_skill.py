@@ -183,6 +183,17 @@ def _unique_walk_errors(errors: list[dict]) -> list[dict]:
     return [unique[key] for key in sorted(unique)]
 
 
+def _missing_side_summary(diff: dict) -> str:
+    """Counts of entries seen on one side only, omitting an empty side."""
+    second = len(diff["unconfirmed_added"])
+    first = len(diff["unconfirmed_removed"])
+    if second and first:
+        return f"{second} entrada(s) só aparecem no segundo manifesto e {first} só no primeiro"
+    if second:
+        return f"{second} entrada(s) só aparecem no segundo manifesto"
+    return f"{first} entrada(s) só aparecem no primeiro manifesto"
+
+
 def _traversal_summary(errors: list[dict], limit: int = 5) -> str:
     """Directory names of a traversal failure, capped so the reason stays short."""
     rels = sorted({item["rel"] for item in errors})
@@ -1751,8 +1762,8 @@ def audit_target(
     # (coverage incomplete, so stability cannot be claimed). ``proven_same`` is
     # the shared rule: an entry missing from one pass is a change only when that
     # pass actually listed the directory that should hold it.
-    proven_change = common.proven_change(run_diff)
-    if proven_change:
+    change_proven = common.proven_change(run_diff)
+    if change_proven:
         unchanged: bool | None = False
     elif run_diff["proven_same"]:
         unchanged = True
@@ -1761,7 +1772,7 @@ def audit_target(
     # ``target_unchanged`` answers one question only: did the target move while
     # this audit was running? Divergence from a reference manifest is a separate
     # fact and never rewrites this field.
-    if proven_change:
+    if change_proven:
         findings.append(
             _integrity_finding(
                 "o manifesto do alvo mudou durante a auditoria: "
@@ -1781,9 +1792,8 @@ def audit_target(
                 line=None,
                 reason=(
                     "a estabilidade do alvo não pôde ser comprovada: "
-                    f"{len(run_diff['unconfirmed_added'])} entrada(s) só aparecem no segundo "
-                    f"manifesto e {len(run_diff['unconfirmed_removed'])} só no primeiro, em "
-                    "subárvore que um dos passes não conseguiu listar"
+                    f"{_missing_side_summary(run_diff)} em subárvore que um dos passes "
+                    "não conseguiu listar"
                 ),
                 recommendation=(
                     "garantir permissão de leitura nos diretórios listados e repetir a auditoria"
@@ -1826,7 +1836,7 @@ def audit_target(
                 ),
             )
         )
-    if proven_change:
+    if change_proven:
         integrity_reason = "manifesto divergente: alvo alterado durante a auditoria"
     elif run_diff["proven_same"]:
         integrity_reason = (

@@ -80,7 +80,9 @@ continua sendo `false`. Uma entrada ausente porque a subárvore não pôde ser
 listada vai para `unconfirmed_added` ou `unconfirmed_removed`, nunca para
 `added`/`removed`, e torna o resultado inconclusivo em vez de afirmar remoção ou
 adição. `holes_before` e `holes_after` nomeiam as subárvores não observadas de
-cada lado, incluindo `.` quando a falha atinge a raiz; `proven_same` indica se a
+cada lado, incluindo `.` quando a falha atinge a raiz e `(caminho desconhecido)`
+quando a travessia falha antes de nomear o diretório; os dois deixam a árvore
+inteira não observada. `proven_same` indica se a
 comparação dos hashes comuns foi completa. `identical` responde a uma pergunta
 menor: diz apenas que nenhuma diferença foi comprovada entre as entradas
 comparadas, e por isso pode ser `true` com `complete: false`. Quem decide se a

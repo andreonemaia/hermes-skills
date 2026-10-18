@@ -166,6 +166,23 @@ class ExportSanitisationTest(unittest.TestCase):
         self.assertNotIn(GITHUB_TOKEN, common.render_json(report))
         self.assertNotIn(GITHUB_TOKEN, common.render_markdown(report))
 
+    def test_the_reference_comparison_is_masked_like_the_run_comparison(self):
+        # The reference diff carries the same path lists as the run diff; a
+        # masking rule applied to one and not the other leaks the target.
+        report = {
+            "reference_diff": {
+                "holes_before": [HOME_PATH],
+                "holes_after": ["."],
+                "unconfirmed_added": [HOME_PATH],
+                "unconfirmed_removed": [],
+                "unverifiable": [HOME_PATH],
+                "walk_errors": [{"rel": HOME_PATH, "reason": "permission"}],
+            }
+        }
+        masked = common.publishable(report)
+        self.assertNotIn("synthuser", str(masked))
+        self.assertEqual(masked["reference_diff"]["holes_after"], ["."])
+
     def test_the_export_states_that_it_is_not_safe_to_attach(self):
         # The report must not promise more than format-based masking delivers.
         publication = common.publication_policy()
@@ -714,6 +731,21 @@ class HolePathFormTest(unittest.TestCase):
             with self.subTest(written=written):
                 holes = common.hole_paths({"entries": {}, "walk_errors": [{"rel": written}]})
                 self.assertTrue(common.hole_covers(holes, "README.md"))
+
+    def test_a_failure_without_a_known_location_covers_the_whole_tree(self):
+        # UNKNOWN_PATH means the walk failed before it could name a directory,
+        # so no entry can be called observed.
+        holes = common.hole_paths({"entries": {}, "walk_errors": [{"rel": common.UNKNOWN_PATH}]})
+        self.assertTrue(common.hole_covers(holes, "README.md"))
+        self.assertTrue(common.hole_covers(holes, "references/qualquer.md"))
+
+    def test_a_hand_written_manifest_with_bare_string_errors_is_read(self):
+        # A manifest can be written by hand or by an older version; a bare
+        # string names the directory, and must not crash the comparison.
+        manifest = {"entries": {}, "walk_errors": ["references/privado", ""]}
+        holes = common.hole_paths(manifest)
+        self.assertTrue(common.hole_covers(holes, "references/privado/x.md"))
+        self.assertTrue(common.hole_covers(holes, "README.md"))
 
 
 if __name__ == "__main__":

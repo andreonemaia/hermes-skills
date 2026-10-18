@@ -684,7 +684,12 @@ def hole_paths(manifest: dict) -> list[str]:
     location could not be named: both leave the whole tree unobserved. Every
     other hole leaves only the entries below it unobserved.
     """
-    return [normalize_hole(item.get("rel")) for item in manifest.get("walk_errors") or []]
+    holes: list[str] = []
+    for item in manifest.get("walk_errors") or []:
+        # A manifest can be written by hand or by an older version; a bare
+        # string names the directory just as well as the current dict shape.
+        holes.append(normalize_hole(item.get("rel") if isinstance(item, dict) else item))
+    return holes
 
 
 def hole_covers(holes: list[str], rel: str) -> bool:
