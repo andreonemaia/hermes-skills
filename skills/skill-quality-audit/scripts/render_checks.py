@@ -41,6 +41,20 @@ SEMANTIC_INTRO = (
 )
 
 
+def _field(label: str, value: str) -> str:
+    """Render one list field, keeping continuation lines inside the item.
+
+    ``how`` and ``limits`` are prose and may wrap; indenting the continuation by
+    two spaces keeps them in the same markdown list item instead of starting a
+    new paragraph that breaks the list.
+    """
+    lines = value.splitlines() or [""]
+    out = [f"- {label}: {lines[0]}\n"]
+    for line in lines[1:]:
+        out.append(f"  {line}\n" if line.strip() else "\n")
+    return "".join(out)
+
+
 def _section(check: checks.Check) -> str:
     return (
         f"### {check.code} — {check.summary}\n"
@@ -48,8 +62,8 @@ def _section(check: checks.Check) -> str:
         f"- categoria: {check.category}\n"
         f"- severidade padrão: {check.default_severity}\n"
         f"- o que verifica: {check.summary}\n"
-        f"- como: {check.how}\n"
-        f"- limites: {check.limits}\n"
+        + _field("como", check.how)
+        + _field("limites", check.limits)
     )
 
 

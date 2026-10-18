@@ -91,7 +91,10 @@ cada lado, incluindo `.` quando a falha atinge a raiz e `(caminho desconhecido)`
 quando a travessia falha antes de nomear o diretório; os dois deixam a árvore
 inteira não observada. Cada registro de `walk_errors` é lido pela mesma
 fronteira, aceite como o objeto `{rel, reason}` que o manifesto gera ou como a
-string que nomeia o diretório: um registro sem motivo declarado traz
+string que nomeia o diretório. O campo é uma lista, mas um registro único
+(string ou objeto) também é aceito e lido como lista de um item: quem escreve o
+manifesto à mão não precisa saber que a forma canônica é a lista. Um registro sem
+motivo declarado traz
 `(motivo desconhecido)` em vez de um motivo vazio ou inventado. `proven_same`
 indica se a
 comparação dos hashes comuns foi completa. `identical` responde a uma pergunta

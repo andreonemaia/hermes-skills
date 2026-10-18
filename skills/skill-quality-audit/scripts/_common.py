@@ -1002,12 +1002,14 @@ def _parse_restricted(raw: str) -> dict:
     Handles: ``key:`` mappings, plain and quoted scalars, inline ``[a, b]``
     lists, comment stripping outside quotes and nesting up to three levels.
     Records as unsupported: block scalars, anchors, aliases, tags, flow maps,
-    tab indentation, duplicate keys, complex keys and deeper nesting.
+    tab indentation, inconsistent indentation, duplicate keys, complex keys and
+    deeper nesting.
     """
     data: dict = {}
     unsupported: list[dict] = []
     seen: set[tuple] = set()
     stack: list[tuple[int, str]] = []
+    child_indents: dict[tuple, int] = {}
     lines = raw.splitlines()
     index = 0
     while index < len(lines):
@@ -1052,31 +1054,31 @@ def _parse_restricted(raw: str) -> dict:
             unsupported.append(
                 {"line": line_no, "construct": "block_scalar", "key": key}
             )
-            _register(data, stack, indent, key, None, unsupported, line_no)
+            _register(data, stack, indent, key, None, unsupported, line_no, child_indents)
             continue
         for token, construct in _UNSUPPORTED_TOKENS:
             if value.startswith(token):
                 unsupported.append(
                     {"line": line_no, "construct": construct, "key": key}
                 )
-                _register(data, stack, indent, key, None, unsupported, line_no)
+                _register(data, stack, indent, key, None, unsupported, line_no, child_indents)
                 break
         else:
             if value == "":
-                _register(data, stack, indent, key, {}, unsupported, line_no)
+                _register(data, stack, indent, key, {}, unsupported, line_no, child_indents)
             elif value.startswith("["):
                 items, closed = _split_flow_items(value)
                 if not closed:
                     unsupported.append(
                         {"line": line_no, "construct": "malformed_flow", "key": key}
                     )
-                    _register(data, stack, indent, key, None, unsupported, line_no)
+                    _register(data, stack, indent, key, None, unsupported, line_no, child_indents)
                 elif any(item[:1] in ("[", "{") for item in items):
                     # Nested flow collections are outside the restricted grammar.
                     unsupported.append(
                         {"line": line_no, "construct": "flow_nesting", "key": key}
                     )
-                    _register(data, stack, indent, key, None, unsupported, line_no)
+                    _register(data, stack, indent, key, None, unsupported, line_no, child_indents)
                 else:
                     _register(
                         data,
@@ -1086,9 +1088,10 @@ def _parse_restricted(raw: str) -> dict:
                         [_unquote(item) for item in items if item.strip()],
                         unsupported,
                         line_no,
+                        child_indents,
                     )
             else:
-                _register(data, stack, indent, key, _unquote(value), unsupported, line_no)
+                _register(data, stack, indent, key, _unquote(value), unsupported, line_no, child_indents)
 
     return {
         "data": data,
@@ -1174,9 +1177,22 @@ def _register(
     value,
     unsupported: list | None = None,
     line_no: int | None = None,
+    child_indents: dict | None = None,
 ) -> None:
     while stack and stack[-1][0] >= indent:
         stack.pop()
+    if stack and child_indents is not None:
+        parent_path = tuple(name for _, name in stack)
+        expected = child_indents.get(parent_path)
+        if expected is not None and expected != indent:
+            # Indentation that fits no open level (YAML would reject it). Do not
+            # guess a parent: record the construct and drop the line.
+            if unsupported is not None:
+                unsupported.append(
+                    {"line": line_no, "construct": "invalid_indentation", "key": key}
+                )
+            return
+        child_indents[parent_path] = indent
     if not stack:
         data[key] = value
         if isinstance(value, dict):

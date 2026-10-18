@@ -90,7 +90,9 @@ INLINE_SPAN_RE = re.compile(r"`([^`\n]+)`")
 #: Script paths named inside a command, with or without the leading ``./``.
 #: The lookbehind keeps ``skills/foo/scripts/x.py`` from yielding a phantom
 #: ``scripts/x.py``: the path must start where the shell token starts.
-SCRIPT_INVOCATION_RE = re.compile(r"(?<![\w./-])((?:\./)?scripts/[\w./-]+)")
+SCRIPT_INVOCATION_RE = re.compile(
+    r"(?<![\w./\\-])((?:\./)?scripts(?:[/\\][\w./\\-]+|\.[\w.-]+))"
+)
 #: Shell operators that end one command and start another on the same line.
 SHELL_SEPARATOR_RE = re.compile(r"&&|\|\||[;|]")
 #: Paths that normally carry synthetic values. The path is context, not proof:
@@ -119,6 +121,10 @@ VALIDATION_RE = re.compile(
 NEGATION_RE = re.compile(
     r"\b(?:n[ãa]o|nem|sem|not|never|without|untested)\b|invalid", re.IGNORECASE
 )
+# Clause boundary for platform evidence: a semicolon or a sentence-ending
+# period. Commas are left alone because "validado no macOS, Linux e Windows"
+# is a single positive claim about all three.
+CLAUSE_RE = re.compile(r";|\.(?=\s|$)")
 PT_MARKERS = (
     " de ",
     " para ",
@@ -387,6 +393,18 @@ def _lines_outside_fences(text: str) -> list[tuple[int, str]]:
         if fence is None:
             out.append((number, line))
     return out
+
+
+def _evidence_clauses(line: str) -> list[str]:
+    """Split a documentation line into clauses for platform evidence.
+
+    A sentence such as "validado no Windows; não testado no Linux" carries one
+    positive and one negative claim. Judging the whole line would let the
+    negation cancel the positive evidence, so the check looks at each clause.
+    Splitting on ``;`` and on a closing period keeps enumerations like
+    "validado no macOS e Linux" in one piece.
+    """
+    return [part for part in CLAUSE_RE.split(line) if part.strip()]
 
 
 def _sanitise(value: str) -> str:
@@ -1049,6 +1067,23 @@ def _check_tests(ctx: Context, code: str):
     )
 
 
+def _script_targets(raw: str) -> list[str]:
+    """Target paths a documented script invocation may name.
+
+    A shell example may cite the script with a Windows separator
+    (``scripts\\x.py``) or, after ``python -m``, as a module
+    (``scripts.x``). Neither is a literal relative path, so the auditor maps
+    them to the files they can denote. The literal path stays first: a real
+    file always wins over the derived candidates.
+    """
+    path = raw[2:] if raw.startswith("./") else raw
+    path = path.replace("\\", "/")
+    if "/" not in path and path.startswith("scripts."):
+        base = "scripts/" + path[len("scripts.") :].replace(".", "/")
+        return [base + ".py", base + "/__init__.py", base]
+    return [path]
+
+
 def _check_documented_commands(ctx: Context, code: str):
     findings = []
     checked = 0
@@ -1058,12 +1093,13 @@ def _check_documented_commands(ctx: Context, code: str):
     # citation of a foreign example path look like a broken command.
     commands = ctx.memo("commands", lambda: _command_references(ctx))
     for rel, number, raw, _remainder in commands:
-        target = raw[2:] if raw.startswith("./") else raw
+        targets = _script_targets(raw)
+        target = targets[0]
         if (rel, number, target) in seen:
             continue
         seen.add((rel, number, target))
         checked += 1
-        if ctx.exists(target):
+        if any(ctx.exists(candidate) for candidate in targets):
             continue
         findings.append(
             common.finding(
@@ -1079,7 +1115,8 @@ def _check_documented_commands(ctx: Context, code: str):
     parsers: dict[str, set[str] | None] = {}
     seen_findings: set[tuple[str, int, str, str]] = set()
     for rel, number, raw, remainder in commands:
-        target = raw[2:] if raw.startswith("./") else raw
+        targets = _script_targets(raw)
+        target = next((item for item in targets if ctx.exists(item)), targets[0])
         if target not in parsers:
             script_text = ctx.text(target) or ""
             found = set(SUBCOMMAND_RE.findall(script_text)) if "argparse" in script_text else set()
@@ -1227,13 +1264,16 @@ def _check_platform_evidence(ctx: Context, code: str):
         evidence = None
         for rel, text in ctx.all_texts():
             for number, line in _lines_outside_fences(text):
-                lowered = line.lower()
-                if not any(alias in lowered for alias in aliases):
-                    continue
-                if NEGATION_RE.search(lowered) or not VALIDATION_RE.search(lowered):
-                    continue
-                evidence = (rel, number, _sanitise(line.strip()))
-                break
+                for clause in _evidence_clauses(line):
+                    lowered = clause.lower()
+                    if not any(alias in lowered for alias in aliases):
+                        continue
+                    if NEGATION_RE.search(lowered) or not VALIDATION_RE.search(lowered):
+                        continue
+                    evidence = (rel, number, _sanitise(clause.strip()))
+                    break
+                if evidence:
+                    break
             if evidence:
                 break
         if evidence:
@@ -1632,6 +1672,7 @@ def _integrity_finding(detail: str, diff: dict, validation: str = "executed"):
         impact="a auditoria promete somente leitura: uma mudança no alvo invalida o resultado",
         recommendation="reexecutar a auditoria sobre um alvo estável e investigar quem escreveu",
         validation=validation,
+        severity="critical",
         severity_justification="integridade do alvo é pré-requisito de qualquer conclusão da auditoria",
     )
 

@@ -864,8 +864,9 @@ class ManifestBoundaryTest(unittest.TestCase):
         return path
 
     def test_an_unwrapped_record_is_read_like_a_one_item_list(self):
-        # Only a list is contract, but a hand-written manifest may carry the
-        # single record bare. Iterating the string would walk it by character.
+        # The canonical form is a list, but the contract also accepts a single
+        # bare record as a one-item list. Iterating the string as-is would walk
+        # it by character.
         for raw in ("references/privado", {"rel": "references/privado", "reason": "permission"}):
             with self.subTest(raw=raw):
                 diff = common.diff_manifests(
@@ -919,9 +920,9 @@ class ManifestBoundaryTest(unittest.TestCase):
             report["reference_diff"]["walk_errors"],
             [{"rel": "references/privado", "reason": common.UNKNOWN_REASON}],
         )
-        self.assertEqual(
-            [item["id"] for item in report["limits"] if item["id"] == "SQA-026"],
-            [support.audit_skill.INTEGRITY_CODE],
+        self.assertIn(
+            support.audit_skill.INTEGRITY_CODE,
+            [item["id"] for item in report["limits"]],
         )
 
     def test_a_reference_without_entries_is_a_usage_error(self):
@@ -1009,6 +1010,73 @@ class RestrictedFlowTest(unittest.TestCase):
                     "malformed_flow",
                     [item["construct"] for item in parsed["unsupported"]],
                 )
+
+
+class MissingRunnerTest(unittest.TestCase):
+    """A catalogue entry without a runner must name itself, not exit 6."""
+
+    def test_a_catalogue_check_without_runner_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            registry = dict(support.audit_skill.REGISTRY)
+            registry.pop("SQA-013", None)
+            with mock.patch.object(support.audit_skill, "REGISTRY", registry):
+                with self.assertRaisesRegex(RuntimeError, "SQA-013 has no runner"):
+                    support.audit(root)
+
+
+class ScriptCitationFormsTest(unittest.TestCase):
+    """SQA-017 must see the forms a reader can actually type."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def _report(self, line: str, suffix: str) -> dict:
+        root = support.build_skill(
+            self._tmp.name,
+            name=f"forms-{suffix}",
+            files={"scripts/cli.py": CLI_PY},
+            readme=f"# forms\n\n## Uso\n\n{line}\n",
+        )
+        return support.audit(root)
+
+    def test_the_module_form_resolves_to_the_script(self):
+        report = self._report("`python -m scripts.cli audit`", "module")
+        self.assertEqual(support.findings(report, "SQA-017"), [])
+
+    def test_a_windows_separator_resolves_to_the_script(self):
+        report = self._report("`python scripts\\cli.py audit`", "backslash")
+        self.assertEqual(support.findings(report, "SQA-017"), [])
+
+    def test_a_missing_module_is_still_a_finding(self):
+        report = self._report("`python -m scripts.missing audit`", "missing")
+        self.assertEqual(len(support.findings(report, "SQA-017")), 1)
+
+
+class RestrictedIndentationTest(unittest.TestCase):
+    """Indentation that fits no open level is recorded, not guessed."""
+
+    def test_a_deeper_line_under_a_scalar_sibling_is_recorded(self):
+        # ``b`` sits one column deeper than its sibling ``a``: YAML rejects it.
+        # The old parser attached it to ``metadata`` as if it were a sibling.
+        parsed = common.read_frontmatter(
+            "---\nname: x\nmetadata:\n  a: 1\n   b: 2\n---\n", backend="restricted"
+        )
+        self.assertEqual(parsed["status"], "ok")
+        self.assertEqual(parsed["data"]["metadata"], {"a": "1"})
+        self.assertIn(
+            "invalid_indentation",
+            [item["construct"] for item in parsed["unsupported"]],
+        )
+
+    def test_consistent_nesting_is_still_read(self):
+        parsed = common.read_frontmatter(
+            "---\nname: x\nmetadata:\n  a:\n    b: 1\n  c: 2\n---\n",
+            backend="restricted",
+        )
+        self.assertEqual(parsed["unsupported"], [])
+        self.assertEqual(parsed["data"]["metadata"], {"a": {"b": "1"}, "c": "2"})
 
 
 if __name__ == "__main__":

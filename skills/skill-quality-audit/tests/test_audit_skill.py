@@ -144,6 +144,26 @@ class PlatformEvidenceTest(unittest.TestCase):
             locations = [item["location"] for item in report["reported_only"] if item["id"] == "SQA-018"]
             self.assertTrue(locations, "menção de validação deveria ir para reported_only")
 
+    def test_negation_for_one_platform_does_not_cancel_the_other(self):
+        # One line, two claims: Windows validated, macOS not. Judging the whole
+        # line let the negation hide the Windows evidence and flagged both.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp, platforms="windows, macos")
+            readme = (root / "README.md").read_text(encoding="utf-8")
+            (root / "README.md").write_text(
+                readme + "\nValidado no Windows; não testado no macOS.\n",
+                encoding="utf-8",
+            )
+            report = support.audit(root)
+            missing = support.findings(report, "SQA-018")
+            self.assertEqual(len(missing), 1)
+            self.assertIn("macos", missing[0]["evidence"])
+            reported = [
+                item for item in report["reported_only"] if item["id"] == "SQA-018"
+            ]
+            self.assertEqual(len(reported), 1)
+            self.assertIn("windows", reported[0]["evidence"])
+
 
 class ExamplesTest(unittest.TestCase):
     def test_synthetic_example_block_is_recognised(self):

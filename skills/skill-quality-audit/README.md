@@ -244,9 +244,10 @@ como estão, para que cada autora decida o que fazer com eles.
 
 O que o piloto mostrou de concreto:
 
-- SQA-006 (descrição que não começa com o gatilho `Use when`) e SQA-014 (link
-  relativo que sai da raiz do alvo, como `../../docs/installation.md`) apareceram
-  em três das quatro skills: são convenções do repositório que valem para todas.
+- SQA-006 (descrição que não começa com o gatilho `Use when`) apareceu em duas
+  das quatro skills e SQA-014 (link relativo que sai da raiz do alvo, como
+  `../../docs/installation.md`) em três: são convenções do repositório que valem
+  para todas.
 - SQA-018 pegou `task-checkpoint-recovery` declarando `windows` no frontmatter
   sem nenhum documento que registre validação nessa plataforma.
 - SQA-019 e SQA-020 em `tests/` vieram todos com confiança `signal`, como o
@@ -276,10 +277,11 @@ Limitações observadas no piloto, registradas sem contorno automático:
   semântica. A verificação não tenta adivinhar se a menção é comando ou
   ilustração.
 - **Exclusões de SQA-025 são estreitas e declaradas.** Ficam fora da varredura
-  apenas títulos de seção e listas de metadados. Cabeçalho de geração e frases
-  que citam testes, manifestos ou checksums continuam sendo varridos: nomear uma
-  evidência não comprova a alegação, e o achado permanece `signal` até o agente
-  conferir o que foi citado.
+  apenas títulos de seção, listas de metadados e blocos cercados (exemplo de
+  texto, não promessa da skill). Cabeçalho de geração e frases que citam testes,
+  manifestos ou checksums continuam sendo varridos: nomear uma evidência não
+  comprova a alegação, e o achado permanece `signal` até o agente conferir o que
+  foi citado.
 
 ## Relação com a independent-code-review
 

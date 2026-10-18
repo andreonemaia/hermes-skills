@@ -33,7 +33,7 @@
 | SQA-024 | structural | low | A documentação contém marcadores de trabalho inacabado (TODO, TBD, FIXME). |
 | SQA-025 | structural | medium | A skill afirma isolamento, somente leitura, ausência de rede ou outra garantia forte. |
 | SQA-026 | structural | critical | O manifesto do alvo difere do esperado: mudou entre o início e o fim da auditoria, ou divergiu do manifesto de referência passado em --check-unchanged. |
-| SQA-027 | structural | info | O frontmatter usa construção que o backend restrito não decide (bloco literal, âncora, mapa em fluxo). |
+| SQA-027 | structural | info | O frontmatter usa construção que o backend restrito não decide (bloco literal, âncora, mapa em fluxo) ou tem indentação inconsistente. |
 | SQA-101 | semantic | medium | Nome, descrição, requisitos declarados e procedimento contam a mesma história. |
 | SQA-102 | semantic | medium | O README descreve o comportamento real sem exagerar capacidades. |
 | SQA-103 | semantic | medium | Exemplos parecem ilustrativos e não dados reais do autor. |
@@ -181,7 +181,7 @@ Executadas por `python scripts/audit_skill.py audit --target <skill>`; cada resu
 - o que verifica: Um comando documentado usa um script do alvo que não existe ou um subcomando que o parser não oferece.
 - como: _check_documented_commands: cruza caminhos scripts/ usados em invocações com o sistema de arquivos e com o parser.
 
-Formatos reconhecidos como invocação: span de código inline, linha de bloco cercado e linha com prompt, desde que iniciados por interpretador (`python`, `python3`, `py`, `bash`, `sh`, `node`, `npx`, `uv`, `pwsh`, `powershell`) ou por `./`, `$` e `>`. Citação em prosa, mesmo entre crases, não é invocação: fica com SQA-013.
+  Formatos reconhecidos como invocação: span de código inline, linha de bloco cercado e linha com prompt, desde que iniciados por interpretador (`python`, `python3`, `py`, `bash`, `sh`, `node`, `npx`, `uv`, `pwsh`, `powershell`) ou por `./`, `$` e `>`. Citação em prosa, mesmo entre crases, não é invocação: fica com SQA-013.
 - limites: A leitura do parser é textual; subcomandos montados em tempo de execução aparecem como unverifiable. Um caminho inexistente é sinal mesmo que o nome pareça ilustrativo (foo, bar): o nome não decide se o caminho existe. Comandos encontrados no alvo nunca são executados.
 
 ### SQA-018 — Uma plataforma declarada no frontmatter não tem nenhuma evidência de exercício na documentação.
@@ -239,7 +239,7 @@ Formatos reconhecidos como invocação: span de código inline, linha de bloco c
 - o que verifica: A documentação contém marcadores de trabalho inacabado (TODO, TBD, FIXME).
 - como: _check_placeholders: procura marcadores em texto fora de blocos de código.
 
-Duas formas contam como citação do vocabulário, não como pendência: o marcador sozinho dentro de span inline ou aspas (`TODO`, 'TBD'), e lista entre parênteses com dois ou mais marcadores em linha que nomeia a classe ("marcadores (TODO, TBD, FIXME)").
+  Duas formas contam como citação do vocabulário, não como pendência: o marcador sozinho dentro de span inline ou aspas (`TODO`, 'TBD'), e lista entre parênteses com dois ou mais marcadores em linha que nomeia a classe ("marcadores (TODO, TBD, FIXME)").
 - limites: Citação em prosa, sem crases nem aspas, continua sinalizada: o auditor confirma. Citação em bloco cercado não é avaliada.
 
 ### SQA-025 — A skill afirma isolamento, somente leitura, ausência de rede ou outra garantia forte.
@@ -258,12 +258,12 @@ Duas formas contam como citação do vocabulário, não como pendência: o marca
 - como: audit_skill.py compara o manifesto antes e depois de rodar as verificações e, com --check-unchanged, compara o manifesto final com a referência.
 - limites: Cobre a janela desta execução e a referência informada; não detecta alterações anteriores à auditoria nem divergências contra referências que não foram passadas.
 
-### SQA-027 — O frontmatter usa construção que o backend restrito não decide (bloco literal, âncora, mapa em fluxo).
+### SQA-027 — O frontmatter usa construção que o backend restrito não decide (bloco literal, âncora, mapa em fluxo) ou tem indentação inconsistente.
 
 - categoria: metadata
 - severidade padrão: info
-- o que verifica: O frontmatter usa construção que o backend restrito não decide (bloco literal, âncora, mapa em fluxo).
-- como: _parse_restricted: registra a construção e a linha em vez de adivinhar o valor.
+- o que verifica: O frontmatter usa construção que o backend restrito não decide (bloco literal, âncora, mapa em fluxo) ou tem indentação inconsistente.
+- como: _parse_restricted: registra a construção e a linha em vez de adivinhar o valor; indentação que não encaixa em nenhum nível aberto é registrada como invalid_indentation, sem anexar o valor ao nó errado.
 - limites: Item não verificável: exige conferência manual ou o backend pyyaml. Não é aprovação nem defeito.
 
 ## Verificações semânticas

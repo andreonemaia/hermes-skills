@@ -122,6 +122,25 @@ class GeneratedDocumentTest(unittest.TestCase):
         for check in support.checks.CATALOGUE:
             self.assertIn(check.code, text, f"{check.code} ausente de contract.md")
 
+    def test_example_report_agrees_with_the_catalogue(self):
+        # The example is documentation: an id, title or category that drifted
+        # from the catalogue would teach the wrong vocabulary.
+        text = (
+            support.SCRIPTS.parent / "references" / "example-report.md"
+        ).read_text(encoding="utf-8")
+        blocks = re.findall(r"```json\n(.*?)```", text, re.DOTALL)
+        self.assertTrue(blocks, "example-report.md não traz bloco JSON")
+        catalogue = {check.code: check for check in support.checks.CATALOGUE}
+        seen = set()
+        for block in blocks:
+            report = json.loads(block)
+            for finding in report.get("findings", []):
+                check = catalogue[finding["id"]]
+                self.assertEqual(finding["check"], check.title, finding["id"])
+                self.assertEqual(finding["category"], check.category, finding["id"])
+                seen.add(finding["id"])
+        self.assertTrue(seen, "nenhum achado no relatório de exemplo")
+
     def test_document_summary_matches_catalogue_size(self):
         text = support.render_checks.render()
         total = len(support.checks.CATALOGUE)

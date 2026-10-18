@@ -357,8 +357,8 @@ Duas formas contam como citação do vocabulário, não como pendência: o marca
         category="metadata",
         method="structural",
         default_severity="info",
-        summary="O frontmatter usa construção que o backend restrito não decide (bloco literal, âncora, mapa em fluxo).",
-        how="_parse_restricted: registra a construção e a linha em vez de adivinhar o valor.",
+        summary="O frontmatter usa construção que o backend restrito não decide (bloco literal, âncora, mapa em fluxo) ou tem indentação inconsistente.",
+        how="_parse_restricted: registra a construção e a linha em vez de adivinhar o valor; indentação que não encaixa em nenhum nível aberto é registrada como invalid_indentation, sem anexar o valor ao nó errado.",
         limits="Item não verificável: exige conferência manual ou o backend pyyaml. Não é aprovação nem defeito.",
     ),
     # ------------------------------------------------------------------- semantic
