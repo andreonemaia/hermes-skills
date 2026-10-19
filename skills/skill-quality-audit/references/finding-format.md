@@ -9,7 +9,7 @@ justificada e em que estado de validação.
 | campo | tipo | sempre presente | significado |
 | --- | --- | --- | --- |
 | `id` | texto | sim | código da verificação que produziu o achado (por exemplo `SQA-013`) |
-| `check` | texto | sim | título exato da verificação no catálogo (`references/checks.md`), não uma descrição livre |
+| `check` | texto | sim | rótulo curto da verificação (`Check.title` em `scripts/checks.py`), não uma descrição livre; o catálogo mostra a forma longa na coluna `título` |
 | `category` | texto | sim | categoria da verificação, uma das emitidas pelo catálogo: `claims`, `consistency`, `documentation`, `integrity`, `metadata`, `privacy`, `references`, `semantic`, `structure`, `tests` |
 | `method` | texto | sim | `structural` (executada pelo script) ou `semantic` (julgada pelo agente) |
 | `severity` | texto | sim | `info`, `low`, `medium`, `high` ou `critical` |
