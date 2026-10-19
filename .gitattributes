@@ -1,0 +1,5 @@
+# Generated catalogue document: `python scripts/render_checks.py --check`
+# compares bytes, so the checkout must keep the LF form this repo commits.
+# Without this pin, core.autocrlf=true would produce a CRLF working copy on
+# Windows and the check would report a stale file that is actually current.
+skills/skill-quality-audit/references/checks.md text eol=lf

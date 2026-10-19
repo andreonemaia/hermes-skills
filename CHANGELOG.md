@@ -8,6 +8,78 @@ skill é o campo `version` do seu próprio `SKILL.md`.
 
 ## [Unreleased]
 
+### Added
+
+- `skill-quality-audit` (0.1.0): nova skill de auditoria de prontidão para
+  publicação. Executa verificações estruturais determinísticas em modo somente
+  leitura sobre uma skill (frontmatter, links relativos, coerência entre
+  catálogo e documentação, plataformas declaradas, comandos citados, privacidade
+  e alegações de capacidade), prova a ausência de escrita com manifesto de
+  conteúdo antes e depois e entrega ao agente os itens semânticos com evidência
+  citada. Cada achado separa severidade, confiança e situação de validação; o
+  catálogo em `references/checks.md` é gerado a partir de `scripts/checks.py` e
+  conferido por `python scripts/render_checks.py --check`. Inclui piloto
+  somente leitura nas quatro skills existentes, com manifestos antes e depois.
+- `skill-quality-audit`: a integridade do alvo passa a distinguir duas
+  comparações independentes. `target_unchanged` responde só se o alvo mudou
+  durante a execução; `matches_reference` responde se ele ainda confere com o
+  manifesto de `--check-unchanged`. Divergência de referência vira achado
+  SQA-026 crítico com código 1, sem reescrever a comparação antes/depois; o
+  código 5 fica reservado para mudança observada durante a auditoria. Arquivo
+  ilegível deixa a comparação incompleta e o resultado inconclusivo, nunca
+  "inalterado". Regressões novas cobrem arquivos legíveis iguais e diferentes,
+  leitura indisponível simulada de forma determinística, referência divergente
+  com alvo estável, mudança no meio da execução e os três estados de
+  `text_state`.
+- `skill-quality-audit`: o relatório passa a expor `reference_compared`, que
+  separa "não comparado" (execução sem `--check-unchanged`) de "inconclusivo",
+  para que uma execução padrão nunca insinue uma comparação de referência que não
+  fez. O código de saída 6 (falha interna do auditor) entra nas tabelas de
+  `README.md` e `SKILL.md`, e o limite de cobertura volta a declarar que links
+  dentro de blocos cercados não são verificados. Alvo de symlink cujo destino não
+  pode ser lido passa a ser valor desconhecido (`null`), nunca a string
+  `"unreadable"`, e `utf-8-sig` é tentado antes de `utf-8` para que o BOM não
+  fique no texto decodificado.
+- `skill-quality-audit`: o contrato de `--fail-on` fica explícito e testado.
+  `never` desliga apenas o efeito dos achados no código de saída: divergência de
+  referência continua em `matches_reference: false` e no achado SQA-026 crítico
+  mesmo com saída 0, mudança comprovada durante a execução continua saindo 5 e
+  comparação inconclusiva continua `null`, nunca virando igualdade nem alteração.
+  A matriz completa está em `references/contract.md`, com testes para o caso
+  `never` nas duas direções.
+- `skill-quality-audit`: o backend de frontmatter passa a ter contrato de uso
+  documentado e testado. `--backend auto` usa `pyyaml` quando importável e cai
+  para o parser restrito caso contrário; `--backend pyyaml` explícito sem a
+  dependência é erro de uso (saída 3), com mensagem que aponta `auto` e
+  `restricted`, e não é reportado como defeito de frontmatter do alvo. Nada é
+  instalado para contornar a ausência.
+- `skill-quality-audit`: o parser restrito deixa de consumir o marcador de
+  duplicidade de uma linha rejeitada por indentação. Uma chave que não entrou na
+  árvore não impede a chave válida seguinte de ser lida, e duplicatas
+  efetivamente aceitas continuam sendo detectadas.
+- `skill-quality-audit`: a política de severidade de SQA-004 fica registrada como
+  deliberada e coberta por teste por chave: `name` e `description` são
+  `critical` porque impedem descoberta, `version` e `platforms` são `high`
+  porque impedem avaliar compatibilidade, e cada achado leva
+  `severity_justification` própria.
+
+### Fixed
+
+- `skill-quality-audit`: a situação da verificação de integridade (SQA-023) passa
+  a dar precedência ao que foi observado. Mudança comprovada durante a execução
+  ou divergência de referência vira `executed_with_findings` mesmo quando a outra
+  comparação está cega, em vez de `unverifiable`; só a ausência de qualquer
+  achado com comparação incompleta continua inconclusiva. Regressão nova cobre
+  exatamente esse caso, e o teste falha contra o código anterior.
+- `skill-quality-audit`: o motivo de SQA-016 não anuncia mais "0 ilegível(is)"
+  quando nenhum arquivo ficou ilegível, e o motivo é montado em partes.
+- `skill-quality-audit`: `severity_justification` fica documentado como a razão
+  da severidade escolhida, inclusive quando ela é a padrão da verificação.
+  `references/contract.md` registra que limites não passam pelo limiar de
+  `--fail-on`, e os exemplos de SQA-013 passam a ficar em bloco cercado: fora
+  dele, a própria documentação da verificação disparava SQA-013 ao auditar esta
+  skill.
+
 ### Changed
 
 - Documentação humana em PT-BR: o `README.md` da raiz, os `README.md` das skills
@@ -23,8 +95,15 @@ skill é o campo `version` do seu próprio `SKILL.md`.
 - Documentação do repositório: o `docs/development.md` passa a exigir que os
   identificadores que o código de uma skill emite permaneçam sincronizados com a
   sua documentação, e o `docs/testing.md` descreve como testar essa consistência.
-- Nenhum script de produção ou comportamento de skill foi alterado por esta
-  mudança.
+- `skill-quality-audit`: `references/contract.md` passa a declarar o que SQA-013
+  examina, construção por construção: links markdown e caminhos entre crases fora
+  de bloco cercado são resolvidos contra o sistema de arquivos; o que está dentro
+  de cerca, links em estilo de referência e URLs externas não são verificados; e
+  invocação de comando em cerca é assunto de SQA-016 e SQA-017, não de SQA-013. O
+  campo `check` dos exemplos fica definido como o título exato do catálogo, e
+  `references/checks.md` é regenerado a partir de `scripts/checks.py`.
+- Nenhum script de produção ou comportamento de skill foi alterado pela
+  reescrita de idioma.
 - `skill-execution-report` (0.1.0): documentação da força das evidências
   explicitada, sem mudança de comportamento nem de esquema. O `README.md`, o
   `SKILL.md` e o `references/evidence-rules.md` passam a declarar que
