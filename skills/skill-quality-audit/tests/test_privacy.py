@@ -217,5 +217,42 @@ class PrivacyDirectCallTest(unittest.TestCase):
         self.assertEqual(first["findings"], second["findings"])
 
 
+class SanitiseGuardTest(unittest.TestCase):
+    """Masking must survive patterns whose capture can be empty."""
+
+    def test_empty_capture_leaves_the_text_untouched(self):
+        original = common.PRIVACY_PATTERNS
+        common.PRIVACY_PATTERNS = (("host", "SQA-019", __import__("re").compile(r"(x)?")),)
+        try:
+            self.assertEqual(audit_skill._sanitise("abc"), "abc")
+        finally:
+            common.PRIVACY_PATTERNS = original
+
+    def test_url_is_kept_while_the_path_beside_it_is_masked(self):
+        text = "https://exemplo.test/c/Users/maria.silva/nota e " + PRIVATE_PATH
+        masked = audit_skill._sanitise(text)
+        self.assertIn("https://exemplo.test/c/Users/maria.silva/nota", masked)
+        self.assertNotIn("maria.silva", masked.split(" e ")[1])
+
+
+class EvidenceMaskingTest(unittest.TestCase):
+    """Masking runs before the evidence is truncated."""
+
+    def test_secret_crossing_the_evidence_cut_is_masked(self):
+        secret = "password=" + "Z" * 24
+        evidence = "x" * (common.MAX_EVIDENCE - 10) + " " + secret
+        finding = common.finding(
+            "SQA-027",
+            file="SKILL.md",
+            line=1,
+            evidence=evidence,
+            impact="impacto",
+            recommendation="recomendação",
+            severity_justification="justificativa",
+        )
+        self.assertLessEqual(len(finding["evidence"]), common.MAX_EVIDENCE)
+        self.assertNotIn("ZZZZ", finding["evidence"])
+
+
 if __name__ == "__main__":
     unittest.main()

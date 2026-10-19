@@ -321,7 +321,7 @@ Formatos reconhecidos como invocação: span de código inline, linha de bloco c
         how="""_check_placeholders: procura marcadores em texto fora de blocos de código.
 
 Duas formas contam como citação do vocabulário, não como pendência: o marcador sozinho dentro de span inline ou aspas (`TODO`, 'TBD'), e lista entre parênteses com dois ou mais marcadores em linha que nomeia a classe ("marcadores (TODO, TBD, FIXME)").""",
-        limits="Citação em prosa, sem crases nem aspas, continua sinalizada: o auditor confirma. Citação em bloco cercado não é avaliada.",
+        limits="Citação em prosa, sem crases nem aspas, continua sinalizada: o auditor confirma. Citação em bloco cercado não é avaliada. Documento ilegível não sustenta ausência de marcador: entra como limite por arquivo, e a contagem no motivo cobre só os documentos legíveis.",
     ),
     Check(
         code="SQA-025",
@@ -331,7 +331,7 @@ Duas formas contam como citação do vocabulário, não como pendência: o marca
         default_severity="medium",
         summary="A skill afirma isolamento, somente leitura, ausência de rede ou outra garantia forte.",
         how="_check_capability_claims: sinal automático sobre a alegação; o agente confirma ou descarta em SQA-105. Ficam fora da varredura apenas títulos de seção (a alegação está na frase abaixo) e listas de metadados (tags, keywords, category). Documentos gerados e frases que citam testes, manifestos ou checksums continuam na varredura: nomear uma evidência não comprova a alegação.",
-        limits="O sinal não decide se a alegação é verdadeira, apenas onde olhar. Uma linha apoiada em manifesto ou teste permanece reported até que o agente confira a evidência. O auditor não executa o alvo: alegações não executadas permanecem reported ou unverifiable. Blocos cercados ficam fora da varredura: são exemplo de texto, não promessa da skill.",
+        limits="O sinal não decide se a alegação é verdadeira, apenas onde olhar. Uma linha apoiada em manifesto ou teste permanece reported até que o agente confira a evidência. O auditor não executa o alvo: alegações não executadas permanecem reported ou unverifiable. Blocos cercados ficam fora da varredura: são exemplo de texto, não promessa da skill. Documento ilegível entra como limite por arquivo: ausência de alegação só é afirmada sobre os documentos legíveis.",
     ),
     Check(
         code="SQA-026",

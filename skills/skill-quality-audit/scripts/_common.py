@@ -455,6 +455,31 @@ def is_repeated_pattern(value: str) -> bool:
     return bool(digits) and len(set(digits)) == 1
 
 
+def _is_link_like(path: str) -> bool:
+    """True for symlinks and, on Windows, for junctions.
+
+    ``os.walk(followlinks=False)`` only refuses to descend into symlinks.
+    A directory junction is a reparse point that ``os.path.islink`` does not
+    report, so without this check the walk would enter it and pull content
+    from outside the target into the manifest.
+    """
+    if os.path.islink(path):
+        return True
+    if os.name != "nt":
+        return False
+    isjunction = getattr(os.path, "isjunction", None)
+    if isjunction is not None:
+        try:
+            return bool(isjunction(path))
+        except OSError:
+            return False
+    try:
+        attributes = os.lstat(path).st_file_attributes
+    except (OSError, AttributeError):
+        return False
+    return bool(attributes & 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT
+
+
 def walk_target(root: str, errors: list[dict] | None = None) -> list[dict]:
     """Every entry under ``root`` except the excluded noise, sorted by path.
 
@@ -487,15 +512,23 @@ def walk_target(root: str, errors: list[dict] | None = None) -> list[dict]:
         root_abs, followlinks=False, onerror=_on_error
     ):
         dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDED_DIRS)
-        for name in sorted(dirnames):
+        descend: list[str] = []
+        for name in dirnames:
             path = os.path.join(current, name)
-            entries.append(
-                {
-                    "abs": path,
-                    "rel": _rel(path, root_abs),
-                    "kind": "symlink" if os.path.islink(path) else "dir",
-                }
-            )
+            if _is_link_like(path):
+                # Report the link and remove it from the walk so neither a
+                # symlink nor a junction is followed.
+                entries.append(
+                    {
+                        "abs": path,
+                        "rel": _rel(path, root_abs),
+                        "kind": "symlink",
+                    }
+                )
+                continue
+            entries.append({"abs": path, "rel": _rel(path, root_abs), "kind": "dir"})
+            descend.append(name)
+        dirnames[:] = descend
         for name in sorted(filenames):
             if name in EXCLUDED_NAMES:
                 continue
@@ -1214,6 +1247,14 @@ def _register(
             return
         child_indents[parent_path] = indent
     if not stack:
+        if indent > 0:
+            # A root key cannot be indented. Attaching it at the root would
+            # invent a top-level key that the document does not have.
+            if unsupported is not None:
+                unsupported.append(
+                    {"line": line_no, "construct": "invalid_indentation", "key": key}
+                )
+            return
         data[key] = value
         if isinstance(value, dict):
             stack.append((indent, key))
@@ -1313,6 +1354,9 @@ def finding(
         raise UsageError(f"severidade inválida: {chosen}")
     if confidence not in VALID_CONFIDENCE:
         raise UsageError(f"confiança inválida: {confidence}")
+    # Mask before truncating: a secret that starts inside the kept window but
+    # would have matched past the cut must not survive as a partial value.
+    evidence = redact(evidence)
     if len(evidence) > MAX_EVIDENCE:
         evidence = evidence[: MAX_EVIDENCE - 3] + "..."
     location = f"{file}:{line}" if line else file

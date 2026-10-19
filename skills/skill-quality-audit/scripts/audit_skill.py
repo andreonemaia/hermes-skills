@@ -291,6 +291,20 @@ class Context:
             out.append((entry["rel"], text))
         return out
 
+    def unreadable_docs(self) -> list[str]:
+        """Documentation files whose text could not be read, sorted by path.
+
+        Checks that report the *absence* of something in the docs must consult
+        this list: an unreadable file is not evidence that the pattern is
+        missing, and claiming so would turn a coverage gap into a clean result.
+        """
+        return [
+            entry["rel"]
+            for entry in self.text_entries
+            if entry["rel"].lower().endswith(DOC_SUFFIXES)
+            and self.text(entry["rel"]) is None
+        ]
+
     def all_texts(self) -> list[tuple[str, str]]:
         """Every readable text file as (relative path, text), sorted by path."""
         out = []
@@ -422,7 +436,13 @@ def _sanitise(value: str) -> str:
     for _cls, _code, pattern in common.PRIVACY_PATTERNS:
 
         def _replace(match: re.Match) -> str:
-            return match.group(0).replace(match.group(1), "<redacted>")
+            value = match.group(1)
+            # A pattern whose capture is optional (or empty) must not reach
+            # str.replace: replacing "" inserts the mask between every
+            # character, and None raises TypeError mid-audit.
+            if not value:
+                return match.group(0)
+            return match.group(0).replace(value, "<redacted>")
 
         text = pattern.sub(_replace, text)
     return text
@@ -1051,25 +1071,50 @@ def _check_tests(ctx: Context, code: str):
             ],
         )
     with_unittest = []
+    unreadable = []
     for rel in test_files:
         text = ctx.text(rel)
-        if text and ("unittest" in text or "pytest" in text):
+        if text is None:
+            unreadable.append(rel)
+            continue
+        if "unittest" in text or "pytest" in text:
             with_unittest.append(rel)
+    limits = [
+        common.limit(
+            code,
+            file=rel,
+            line=None,
+            reason="arquivo de teste ilegível: os imports não puderam ser verificados",
+            recommendation="conceder leitura ao arquivo e repetir a auditoria",
+        )
+        for rel in unreadable
+    ]
+    readable = len(test_files) - len(unreadable)
     if not with_unittest:
+        if not readable:
+            return result(
+                "unverifiable",
+                f"{len(unreadable)} arquivo(s) test_*.py ilegível(is): descoberta não avaliada",
+                limits=limits,
+            )
         return result(
             "executed",
-            f"{len(test_files)} arquivo(s) test_*.py sem unittest ou pytest",
+            f"{readable} arquivo(s) test_*.py legível(is) sem unittest ou pytest",
             findings=[
                 common.finding(
                     code,
-                    file=test_files[0],
+                    file=next(rel for rel in test_files if rel not in unreadable),
                     line=None,
-                    evidence=f"{len(test_files)} arquivo(s) test_*.py sem import de unittest ou pytest",
+                    evidence=(
+                        f"{readable} arquivo(s) test_*.py legível(is) sem import de "
+                        "unittest ou pytest"
+                    ),
                     impact="os testes existem mas não são executáveis pelo comando padrão documentado",
                     recommendation="usar unittest da biblioteca padrão, como o restante do repositório",
                     severity_justification="teste que não roda na verificação do repositório não protege nada",
                 )
             ],
+            limits=limits,
         )
     # Textual signal only: the word appearing in the file does not prove that
     # discovery finds the tests, that they run, or that they pass. The reason
@@ -1078,6 +1123,7 @@ def _check_tests(ctx: Context, code: str):
         "executed",
         f"{len(test_files)} arquivo(s) test_*.py; {len(with_unittest)} citam "
         "unittest ou pytest (sinal textual, execução não verificada)",
+        limits=limits,
     )
 
 
@@ -1491,8 +1537,24 @@ def _check_placeholders(ctx: Context, code: str):
                 if _marker_is_citation(line, match):
                     continue
                 hits.append((rel, number, match.group(1)))
+    unreadable = ctx.unreadable_docs()
+    limits = [
+        common.limit(
+            code,
+            file=rel,
+            line=None,
+            reason="documento ilegível: a ausência de marcadores não pôde ser verificada",
+            recommendation="conceder leitura ao arquivo e repetir a auditoria",
+        )
+        for rel in unreadable
+    ]
     if not hits:
-        return result("executed", "nenhum marcador de trabalho inacabado")
+        return result(
+            "executed",
+            "nenhum marcador de trabalho inacabado"
+            + (f" nos {len(ctx.docs())} documento(s) legível(is)" if unreadable else ""),
+            limits=limits,
+        )
     shown = hits[:5]
     findings = [
         common.finding(
@@ -1518,7 +1580,9 @@ def _check_placeholders(ctx: Context, code: str):
                 severity_justification="agregação do mesmo defeito para manter o relatório legível",
             )
         )
-    return result("executed", f"{len(hits)} marcador(es)", findings=findings)
+    return result(
+        "executed", f"{len(hits)} marcador(es)", findings=findings, limits=limits
+    )
 
 
 def _delimited_span(line: str, start: int, end: int, opener: str, closer: str) -> str | None:
@@ -1582,8 +1646,24 @@ def _check_capability_claims(ctx: Context, code: str):
                 if pattern.search(line):
                     hits.append((rel, number, label, _sanitise(stripped)))
                     break
+    unreadable = ctx.unreadable_docs()
+    limits = [
+        common.limit(
+            code,
+            file=rel,
+            line=None,
+            reason="documento ilegível: alegações de capacidade não puderam ser varridas",
+            recommendation="conceder leitura ao arquivo e repetir a auditoria",
+        )
+        for rel in unreadable
+    ]
     if not hits:
-        return result("executed", "nenhuma alegação de capacidade ou isolamento")
+        return result(
+            "executed",
+            "nenhuma alegação de capacidade ou isolamento"
+            + (f" nos {len(ctx.docs())} documento(s) legível(is)" if unreadable else ""),
+            limits=limits,
+        )
     shown = hits[:5]
     findings = [
         common.finding(
@@ -1612,6 +1692,7 @@ def _check_capability_claims(ctx: Context, code: str):
         f"{len(hits)} alegação(ões) sinalizada(s) para confirmação do agente",
         findings=findings,
         reported=reported,
+        limits=limits,
     )
 
 
@@ -1936,6 +2017,7 @@ def audit_target(
             "insuficiente (conteúdo ilegível, travessia incompleta ou entrada "
             "ausente em área não observada)"
         )
+    integrity_findings = [item for item in findings if item.get("id") == INTEGRITY_CODE]
     checks_run.append(
         {
             "code": INTEGRITY_CODE,
@@ -1946,6 +2028,8 @@ def audit_target(
                 else "executed"
                 if run_diff["proven_same"] and reference_ok is not False
                 else "executed_with_findings"
+                if integrity_findings
+                else "unverifiable"
             ),
             "reason": integrity_reason,
         }

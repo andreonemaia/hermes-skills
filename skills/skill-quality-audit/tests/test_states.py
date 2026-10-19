@@ -172,5 +172,88 @@ class TestsSignalTest(unittest.TestCase):
         self.assertIn("não prova de descoberta", limits)
 
 
+class UnreadableEvidenceTest(unittest.TestCase):
+    """An absence claim must not rest on a file that could not be read."""
+
+    def _unreadable(self, name: str):
+        real = support.common.read_text_state
+
+        def fake(path):
+            if pathlib.Path(path).name == name:
+                return None, "unreadable"
+            return real(path)
+
+        return mock.patch.object(support.common, "read_text_state", side_effect=fake)
+
+    def test_only_unreadable_test_file_is_unverifiable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(
+                tmp,
+                files={"tests/test_x.py": "def test_x():\n    pass\n"},
+                drop=("tests/test_run.py",),
+            )
+            with self._unreadable("test_x.py"):
+                report = support.audit(root)
+        self.assertNotIn("SQA-016", support.codes(report))
+        self.assertEqual(support.status(report, "SQA-016"), "unverifiable")
+        self.assertTrue(
+            any(
+                item["id"] == "SQA-016" and item["file"] == "tests/test_x.py"
+                for item in report["limits"]
+            )
+        )
+
+    def test_mixed_readable_and_unreadable_tests_qualify_the_finding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(
+                tmp,
+                files={
+                    "tests/test_a.py": "VALOR = 1\n",
+                    "tests/test_b.py": "VALOR = 2\n",
+                },
+                drop=("tests/test_run.py",),
+            )
+            with self._unreadable("test_a.py"):
+                report = support.audit(root)
+        finding = support.findings(report, "SQA-016")[0]
+        self.assertIn("legível(is)", finding["evidence"])
+        self.assertNotIn("2 arquivo(s)", finding["evidence"])
+        self.assertTrue(
+            any(item["id"] == "SQA-016" and item["file"] == "tests/test_a.py" for item in report["limits"])
+        )
+
+    def test_unreadable_document_limits_the_placeholder_absence_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            with self._unreadable("README.md"):
+                report = support.audit(root)
+        reason = next(
+            row["reason"] for row in report["checks_run"] if row["code"] == "SQA-024"
+        )
+        self.assertIn("legível(is)", reason)
+        self.assertTrue(
+            any(item["id"] == "SQA-024" and item["file"] == "README.md" for item in report["limits"])
+        )
+
+
+class IntegrityStatusTest(unittest.TestCase):
+    """A hole without an integrity finding is unverifiable, not a result."""
+
+    def test_hole_without_finding_is_unverifiable(self):
+        real = support.common.walk_target
+
+        def fake(root, errors):
+            entries = real(root, errors)
+            errors.append({"rel": "references/privado", "reason": "PermissionError"})
+            return entries
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            with mock.patch.object(support.common, "walk_target", side_effect=fake):
+                report = support.audit(root)
+        self.assertNotIn("SQA-026", support.codes(report))
+        self.assertEqual(support.status(report, "SQA-026"), "unverifiable")
+
+
 if __name__ == "__main__":
     unittest.main()

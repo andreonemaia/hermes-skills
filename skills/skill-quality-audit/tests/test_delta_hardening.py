@@ -1057,6 +1057,19 @@ class ScriptCitationFormsTest(unittest.TestCase):
 class RestrictedIndentationTest(unittest.TestCase):
     """Indentation that fits no open level is recorded, not guessed."""
 
+    def test_indented_root_key_is_not_attached_to_the_root(self):
+        # ``stray`` has no open parent. Attaching it at the root would invent a
+        # top-level key the document never declared.
+        parsed = common.read_frontmatter(
+            "---\nname: x\n  stray: 1\n---\n", backend="restricted"
+        )
+        self.assertEqual(parsed["status"], "ok")
+        self.assertNotIn("stray", parsed["data"])
+        self.assertIn(
+            "invalid_indentation",
+            [item["construct"] for item in parsed["unsupported"]],
+        )
+
     def test_a_deeper_line_under_a_scalar_sibling_is_recorded(self):
         # ``b`` sits one column deeper than its sibling ``a``: YAML rejects it.
         # The old parser attached it to ``metadata`` as if it were a sibling.

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import pathlib
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -37,6 +39,7 @@ class StableTargetTest(unittest.TestCase):
             self.assertEqual(report["manifest_unreadable"], [])
             self.assertIsNone(report["matches_reference"])
             self.assertNotEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
+            self.assertEqual(support.status(report, "SQA-026"), "executed")
 
     def test_manifest_digests_match_when_nothing_changes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -107,6 +110,7 @@ class UnreadableContentTest(unittest.TestCase):
                 any(item["id"] == "SQA-026" for item in report["limits"]),
                 msg="conteúdo inacessível precisa virar limite declarado",
             )
+            self.assertEqual(support.status(report, "SQA-026"), "unverifiable")
             markdown = support.common.render_markdown(report)
             self.assertIn("inconclusivo", markdown)
             self.assertIn("Sem conteúdo legível", markdown)
@@ -161,6 +165,7 @@ class RunComparisonTest(unittest.TestCase):
             self.assertEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
             finding = support.findings(report, "SQA-026")[0]
             self.assertIn("durante a auditoria", finding["evidence"])
+            self.assertEqual(support.status(report, "SQA-026"), "executed_with_findings")
 
 
 class NotComparedTest(unittest.TestCase):
@@ -195,6 +200,43 @@ class UnreadableSymlinkTest(unittest.TestCase):
         self.assertEqual(diff["changed"], [])
         self.assertFalse(diff["complete"])
         self.assertTrue(diff["identical"])
+
+
+@unittest.skipUnless(os.name == "nt", "junctions are a Windows construct")
+class JunctionTraversalTest(unittest.TestCase):
+    """A junction is a reparse point: report it, never walk into it."""
+
+    def test_junction_is_reported_and_its_target_is_not_audited(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            root = support.build_skill(tmp)
+            outside_path = pathlib.Path(outside)
+            (outside_path / "outside-secret.txt").write_text(
+                "SEGREDO-EXTERNO", encoding="utf-8"
+            )
+            link = root / "references" / "linked"
+            link.parent.mkdir(parents=True, exist_ok=True)
+            created = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(outside_path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if created.returncode != 0:
+                self.skipTest(f"mklink /J indisponível: {created.stderr.strip()}")
+            try:
+                entries = support.common.walk_target(str(root))
+                by_rel = {entry["rel"]: entry for entry in entries}
+                self.assertEqual(by_rel["references/linked"]["kind"], "symlink")
+                self.assertFalse(
+                    any(rel.startswith("references/linked/") for rel in by_rel)
+                )
+                report = support.audit(root)
+                serialised = json.dumps(report)
+                self.assertNotIn("outside-secret.txt", serialised)
+                self.assertNotIn("SEGREDO-EXTERNO", serialised)
+            finally:
+                os.rmdir(link)
 
 
 class ReferenceManifestTest(unittest.TestCase):

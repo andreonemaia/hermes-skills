@@ -240,7 +240,7 @@ Executadas por `python scripts/audit_skill.py audit --target <skill>`; cada resu
 - como: _check_placeholders: procura marcadores em texto fora de blocos de código.
 
   Duas formas contam como citação do vocabulário, não como pendência: o marcador sozinho dentro de span inline ou aspas (`TODO`, 'TBD'), e lista entre parênteses com dois ou mais marcadores em linha que nomeia a classe ("marcadores (TODO, TBD, FIXME)").
-- limites: Citação em prosa, sem crases nem aspas, continua sinalizada: o auditor confirma. Citação em bloco cercado não é avaliada.
+- limites: Citação em prosa, sem crases nem aspas, continua sinalizada: o auditor confirma. Citação em bloco cercado não é avaliada. Documento ilegível não sustenta ausência de marcador: entra como limite por arquivo, e a contagem no motivo cobre só os documentos legíveis.
 
 ### SQA-025 — A skill afirma isolamento, somente leitura, ausência de rede ou outra garantia forte.
 
@@ -248,7 +248,7 @@ Executadas por `python scripts/audit_skill.py audit --target <skill>`; cada resu
 - severidade padrão: medium
 - o que verifica: A skill afirma isolamento, somente leitura, ausência de rede ou outra garantia forte.
 - como: _check_capability_claims: sinal automático sobre a alegação; o agente confirma ou descarta em SQA-105. Ficam fora da varredura apenas títulos de seção (a alegação está na frase abaixo) e listas de metadados (tags, keywords, category). Documentos gerados e frases que citam testes, manifestos ou checksums continuam na varredura: nomear uma evidência não comprova a alegação.
-- limites: O sinal não decide se a alegação é verdadeira, apenas onde olhar. Uma linha apoiada em manifesto ou teste permanece reported até que o agente confira a evidência. O auditor não executa o alvo: alegações não executadas permanecem reported ou unverifiable. Blocos cercados ficam fora da varredura: são exemplo de texto, não promessa da skill.
+- limites: O sinal não decide se a alegação é verdadeira, apenas onde olhar. Uma linha apoiada em manifesto ou teste permanece reported até que o agente confira a evidência. O auditor não executa o alvo: alegações não executadas permanecem reported ou unverifiable. Blocos cercados ficam fora da varredura: são exemplo de texto, não promessa da skill. Documento ilegível entra como limite por arquivo: ausência de alegação só é afirmada sobre os documentos legíveis.
 
 ### SQA-026 — O manifesto do alvo difere do esperado: mudou entre o início e o fim da auditoria, ou divergiu do manifesto de referência passado em --check-unchanged.
 
