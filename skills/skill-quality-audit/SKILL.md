@@ -42,7 +42,9 @@ Don't use for:
 
 - Python 3.11+ with `pyyaml` available for full frontmatter reading. Without it
   the script falls back to a restricted parser and reports SQA-027 for constructs
-  it cannot decide.
+  it cannot decide. `--backend auto` is what falls back; asking for
+  `--backend pyyaml` when PyYAML is not importable is a usage error (exit 3),
+  never a frontmatter defect of the target, and nothing is installed to hide it.
 - The target as a local directory. No network access is used.
 
 ## Quick Reference
@@ -79,8 +81,17 @@ python scripts/render_checks.py --check
 | 5 | the target changed while it was being audited (a difference observed between the before and after manifests of this run) |
 | 6 | the auditor itself failed unexpectedly; there is no trustworthy report |
 
-`--fail-on` defaults to `high`; `never` keeps findings in the report and makes
-the exit code ignore them.
+`--fail-on` defaults to `high` and only chooses which findings produce exit 1.
+`never` keeps every finding in the report and stops findings from producing
+exit 1; it changes nothing else:
+
+- a reference divergence stays visible as `matches_reference: false` and as the
+  critical SQA-026 finding, even when the exit code is 0;
+- a change proven during the run still exits 5, `never` or not, because exit 5
+  reports an integrity failure, not a finding;
+- an inconclusive comparison stays inconclusive: `matches_reference` is `null`
+  (or the comparison is partial, with `holes_*` naming what was not observed),
+  never "equal" and never "changed".
 
 ## Procedure
 
@@ -225,7 +236,8 @@ documentation and the published command cannot drift apart silently.
   absence of external effects.
 - Frontmatter is read by `pyyaml` when available and by a restricted parser
   otherwise. The restricted parser reports what it cannot decide (SQA-027)
-  instead of guessing.
+  instead of guessing. A missing PyYAML only degrades `auto` to the restricted
+  parser; `--backend pyyaml` without the dependency exits 3 as usage.
 - Language and capability-claim checks are heuristics and always `signal`.
 - The target's tests are never executed here; SQA-016 only observes that `tests/`
   exists, follows the `test_*.py` naming pattern and mentions `unittest` or

@@ -114,6 +114,22 @@ class TextStateTest(unittest.TestCase):
         self.assertIsNone(self.ctx.text("NAO_EXISTE.md"))
         self.assertIsNotNone(self.ctx.text("README.md"))
 
+    def test_uppercase_suffix_is_counted_by_both_doc_views(self):
+        (self.root / "NOTAS.MD").write_text("texto\n", encoding="utf-8")
+        ctx = Context(str(self.root))
+        self.assertIn("NOTAS.MD", [rel for rel, _ in ctx.docs()])
+        real = support.common.read_text_state
+
+        def fake(path):
+            if pathlib.Path(path).name == "NOTAS.MD":
+                return None, "unreadable"
+            return real(path)
+
+        with mock.patch.object(support.common, "read_text_state", side_effect=fake):
+            ctx = Context(str(self.root))
+            self.assertIn("NOTAS.MD", ctx.unreadable_docs())
+            self.assertNotIn("NOTAS.MD", [rel for rel, _ in ctx.docs()])
+
     def test_unreadable_skill_md_is_not_reported_as_missing(self):
         real = support.common.read_text_state
 
@@ -220,6 +236,39 @@ class UnreadableEvidenceTest(unittest.TestCase):
         self.assertNotIn("2 arquivo(s)", finding["evidence"])
         self.assertTrue(
             any(item["id"] == "SQA-016" and item["file"] == "tests/test_a.py" for item in report["limits"])
+        )
+
+    def test_mixed_tests_that_run_keep_the_hole_in_the_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(
+                tmp,
+                files={"tests/test_a.py": "import unittest\n"},
+            )
+            with self._unreadable("test_run.py"):
+                report = support.audit(root)
+        # The default fixture is still present, so both files are counted and
+        # only one of them could be read.
+        reason = next(
+            row["reason"] for row in report["checks_run"] if row["code"] == "SQA-016"
+        )
+        self.assertIn("(1 ilegível(is))", reason)
+        self.assertIn("1 citam unittest ou pytest", reason)
+        self.assertTrue(
+            any(
+                item["id"] == "SQA-016" and item["file"] == "tests/test_run.py"
+                for item in report["limits"]
+            )
+        )
+
+    def test_a_fully_readable_run_does_not_announce_zero_unreadable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = support.audit(support.build_skill(tmp))
+        reason = next(
+            row["reason"] for row in report["checks_run"] if row["code"] == "SQA-016"
+        )
+        self.assertNotIn("ilegível", reason)
+        self.assertFalse(
+            any(item["id"] == "SQA-016" for item in report["limits"])
         )
 
     def test_unreadable_document_limits_the_placeholder_absence_claim(self):

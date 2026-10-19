@@ -5,9 +5,11 @@ from __future__ import annotations
 import io
 import json
 import pathlib
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 import support
 
@@ -49,7 +51,20 @@ class MissingMetadataTest(unittest.TestCase):
             self.assertIn("description", evidence)
             self.assertIn("version", evidence)
             self.assertIn("platforms", evidence)
-            self.assertEqual({item["severity"] for item in missing}, {"critical", "high"})
+            # The documented policy: name/description are critical because they
+            # gate discovery, version/platforms are high. The mapping is pinned
+            # per key, not just as a set, so a swap would be caught.
+            by_key = {}
+            for item in missing:
+                match = re.search(r"ausente:\s*(?P<key>\S+)\s*$", item["evidence"])
+                if match is None:
+                    self.fail(f"evidência sem chave nomeada: {item['evidence']!r}")
+                by_key[match.group("key")] = item
+            self.assertEqual(by_key["description"]["severity"], "critical")
+            self.assertEqual(by_key["version"]["severity"], "high")
+            self.assertEqual(by_key["platforms"]["severity"], "high")
+            for item in missing:
+                self.assertTrue(item["severity_justification"].strip())
             self.assertEqual(report["exit_code"], support.common.EXIT_FINDINGS)
 
     def test_unreadable_frontmatter_is_not_a_clean_result(self):
@@ -303,6 +318,37 @@ class CliTest(unittest.TestCase):
             )
             self.assertEqual(code, support.common.EXIT_USAGE)
             self.assertIn("fail-on", err)
+
+    def test_explicit_pyyaml_without_the_dependency_is_a_usage_error(self):
+        # Availability is patched, so the test is deterministic on any host and
+        # does not need to uninstall anything. The failure belongs to the
+        # auditor's environment: it must not be reported as target frontmatter.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            with mock.patch.object(
+                support.common, "_pyyaml_available", return_value=False
+            ):
+                code, out, err = self._run(
+                    ["audit", "--target", str(root), "--backend", "pyyaml"]
+                )
+            self.assertEqual(code, support.common.EXIT_USAGE)
+            self.assertEqual(out, "")
+            self.assertIn("pyyaml", err.lower())
+            self.assertIn("restricted", err)
+            self.assertNotIn("Traceback", err)
+            self.assertNotIn("SQA-002", out)
+
+    def test_auto_still_falls_back_when_pyyaml_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            with mock.patch.object(
+                support.common, "_pyyaml_available", return_value=False
+            ):
+                code, out, _ = self._run(
+                    ["audit", "--target", str(root), "--backend", "auto", "--format", "json"]
+                )
+            self.assertEqual(code, support.common.EXIT_OK)
+            self.assertEqual(json.loads(out)["findings"], [])
 
     def test_reference_divergence_is_a_finding_not_a_run_change(self):
         with tempfile.TemporaryDirectory() as tmp:

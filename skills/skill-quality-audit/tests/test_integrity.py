@@ -225,7 +225,12 @@ class JunctionTraversalTest(unittest.TestCase):
             if created.returncode != 0:
                 self.skipTest(f"mklink /J indisponível: {created.stderr.strip()}")
             try:
-                entries = support.common.walk_target(str(root))
+                # Same arity as production (``audit_skill.Context``): the walk
+                # error channel is passed explicitly, and an empty result pins
+                # that the junction itself did not become a traversal failure.
+                walk_errors = []
+                entries = support.common.walk_target(str(root), walk_errors)
+                self.assertEqual(walk_errors, [])
                 by_rel = {entry["rel"]: entry for entry in entries}
                 self.assertEqual(by_rel["references/linked"]["kind"], "symlink")
                 self.assertFalse(
@@ -273,6 +278,48 @@ class ReferenceManifestTest(unittest.TestCase):
             )[1].split("\n")[0])
             self.assertTrue(report["reference_compared"])
 
+    def test_never_keeps_the_divergence_visible_with_a_zero_exit(self):
+        """``never`` silences the exit code, not the reference fact."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            reference = pathlib.Path(tmp) / "reference.json"
+            write_manifest(root, reference)
+            (root / "README.md").write_text("# versão nova\n", encoding="utf-8")
+
+            report = support.audit(
+                root, reference_manifest=str(reference), fail_on="never"
+            )
+
+            self.assertFalse(report["matches_reference"])
+            self.assertTrue(report["reference_compared"])
+            self.assertEqual(report["exit_code"], support.common.EXIT_OK)
+            self.assertEqual(support.codes(report).count("SQA-026"), 1)
+            self.assertEqual(support.findings(report, "SQA-026")[0]["severity"], "critical")
+
+    def test_never_does_not_suppress_a_change_observed_during_the_run(self):
+        """Exit 5 reports integrity, not a finding: ``never`` leaves it alone."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            reference = pathlib.Path(tmp) / "reference.json"
+            write_manifest(root, reference)
+            real = support.common.build_manifest
+            calls = {"n": 0}
+
+            def mutating(path):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    (pathlib.Path(path) / "novo.md").write_text("x\n", encoding="utf-8")
+                return real(path)
+
+            with mock.patch.object(support.common, "build_manifest", side_effect=mutating):
+                report = support.audit(
+                    root, reference_manifest=str(reference), fail_on="never"
+                )
+
+            self.assertFalse(report["target_unchanged"])
+            self.assertEqual(calls["n"], 2, msg="premissa: um snapshot antes, um depois")
+            self.assertEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
+
     def test_divergence_and_run_change_stay_two_separate_findings(self):
         """Reference divergence never hides a change observed during the run."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -294,12 +341,93 @@ class ReferenceManifestTest(unittest.TestCase):
 
             self.assertFalse(report["matches_reference"])
             self.assertFalse(report["target_unchanged"])
+            self.assertEqual(calls["n"], 2, msg="premissa: um snapshot antes, um depois")
             self.assertEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
             integrity = support.findings(report, "SQA-026")
             self.assertEqual(len(integrity), 2)
             evidences = " ".join(item["evidence"] for item in integrity)
             self.assertIn("referência", evidences)
             self.assertIn("durante a auditoria", evidences)
+
+
+class IntegrityStatusPrecedenceTest(unittest.TestCase):
+    """An observed finding outranks a blind comparison in the check status."""
+
+    def test_proven_change_with_inconclusive_reference_is_not_unverifiable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            reference = pathlib.Path(tmp) / "reference.json"
+            write_manifest(root, reference)
+            real_hash = support.common.sha256_file
+            real_manifest = support.common.build_manifest
+            unreadable = root / "README.md"
+            calls = {"n": 0}
+
+            def fake_hash(path):
+                if pathlib.Path(path) == unreadable:
+                    return None
+                return real_hash(path)
+
+            def mutating(path):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    (pathlib.Path(path) / "novo.md").write_text("x\n", encoding="utf-8")
+                return real_manifest(path)
+
+            with mock.patch.object(support.common, "sha256_file", side_effect=fake_hash):
+                with mock.patch.object(
+                    support.common, "build_manifest", side_effect=mutating
+                ):
+                    report = support.audit(root, reference_manifest=str(reference))
+
+            self.assertTrue(report["reference_compared"])
+            self.assertIsNone(report["matches_reference"])
+            self.assertIs(report["target_unchanged"], False)
+            self.assertEqual(calls["n"], 2, msg="premissa: um snapshot antes, um depois")
+            self.assertEqual(report["exit_code"], support.common.EXIT_TARGET_CHANGED)
+            self.assertEqual(len(support.findings(report, "SQA-026")), 1)
+            self.assertEqual(
+                support.status(report, "SQA-026"),
+                "executed_with_findings",
+                msg="mudança comprovada não pode ser relatada como lacuna de cobertura",
+            )
+
+    def test_inconclusive_reference_without_findings_stays_unverifiable(self):
+        """No finding + blind reference: equality before/after is not enough."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = support.build_skill(tmp)
+            reference = pathlib.Path(tmp) / "reference.json"
+            real_hash = support.common.sha256_file
+            unreadable = root / "README.md"
+
+            def blind_reference_hash(path):
+                # The reference manifest is written with a null hash for one
+                # file, so comparing against it cannot be confirmed later.
+                if pathlib.Path(path) == unreadable:
+                    return None
+                return real_hash(path)
+
+            with mock.patch.object(
+                support.common, "sha256_file", side_effect=blind_reference_hash
+            ):
+                write_manifest(root, reference)
+
+            # The patch is deliberately out of scope here: only the reference
+            # manifest is written blind, so the audit itself still reads the
+            # target normally and the comparison stays inconclusive.
+            report = support.audit(root, reference_manifest=str(reference))
+
+            self.assertTrue(report["reference_compared"])
+            self.assertIsNone(report["matches_reference"])
+            self.assertIs(report["target_unchanged"], True)
+            self.assertEqual(support.findings(report, "SQA-026"), [])
+            self.assertEqual(report["exit_code"], 0)
+            self.assertEqual(
+                support.status(report, "SQA-026"),
+                "unverifiable",
+                msg="referência ilegível mantém a verificação inconclusiva",
+            )
 
 
 if __name__ == "__main__":

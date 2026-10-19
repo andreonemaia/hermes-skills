@@ -53,6 +53,16 @@ TOOL_VERSION = "0.1.0"
 
 INTEGRITY_CODE = "SQA-026"
 DOC_SUFFIXES = (".md", ".markdown", ".txt", ".rst")
+
+
+def _is_doc(rel: str) -> bool:
+    """Whether ``rel`` is human documentation, whatever the case of its suffix.
+
+    ``docs()`` and ``unreadable_docs()`` must agree on the same set: if one
+    counted a file the other did not, an unreadable document would silently
+    stop limiting the checks that reason about absent documentation.
+    """
+    return rel.lower().endswith(DOC_SUFFIXES)
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\(\s*([^)\s]+)")
 BACKTICK_PATH_RE = re.compile(
@@ -283,7 +293,7 @@ class Context:
         """Documentation files as (relative path, text), sorted by path."""
         out = []
         for entry in self.text_entries:
-            if not entry["rel"].lower().endswith(DOC_SUFFIXES):
+            if not _is_doc(entry["rel"]):
                 continue
             text = self.text(entry["rel"])
             if text is None:
@@ -301,8 +311,7 @@ class Context:
         return [
             entry["rel"]
             for entry in self.text_entries
-            if entry["rel"].lower().endswith(DOC_SUFFIXES)
-            and self.text(entry["rel"]) is None
+            if _is_doc(entry["rel"]) and self.text(entry["rel"]) is None
         ]
 
     def all_texts(self) -> list[tuple[str, str]]:
@@ -436,13 +445,13 @@ def _sanitise(value: str) -> str:
     for _cls, _code, pattern in common.PRIVACY_PATTERNS:
 
         def _replace(match: re.Match) -> str:
-            value = match.group(1)
+            captured = match.group(1)
             # A pattern whose capture is optional (or empty) must not reach
             # str.replace: replacing "" inserts the mask between every
             # character, and None raises TypeError mid-audit.
-            if not value:
+            if not captured:
                 return match.group(0)
-            return match.group(0).replace(value, "<redacted>")
+            return match.group(0).replace(captured, "<redacted>")
 
         text = pattern.sub(_replace, text)
     return text
@@ -1119,12 +1128,14 @@ def _check_tests(ctx: Context, code: str):
     # Textual signal only: the word appearing in the file does not prove that
     # discovery finds the tests, that they run, or that they pass. The reason
     # says exactly that so the report never claims execution.
-    return result(
-        "executed",
-        f"{len(test_files)} arquivo(s) test_*.py; {len(with_unittest)} citam "
-        "unittest ou pytest (sinal textual, execução não verificada)",
-        limits=limits,
+    reason = f"{len(test_files)} arquivo(s) test_*.py"
+    if unreadable:
+        reason += f" ({len(unreadable)} ilegível(is))"
+    reason += (
+        f"; {len(with_unittest)} citam unittest ou pytest "
+        "(sinal textual, execução não verificada)"
     )
+    return result("executed", reason, limits=limits)
 
 
 def _script_targets(raw: str) -> list[str]:
@@ -2023,12 +2034,18 @@ def audit_target(
             "code": INTEGRITY_CODE,
             "method": "structural",
             "status": (
-                "unverifiable"
+                # A recorded finding means something was observed: a proven
+                # change or a reference divergence must not be reported as a
+                # coverage gap just because the other comparison was blind.
+                # Without a finding, a blind reference comparison still makes
+                # the check inconclusive: an identical before/after manifest
+                # says nothing about the reference it could not read.
+                "executed_with_findings"
+                if integrity_findings
+                else "unverifiable"
                 if reference_compared and reference_ok is None
                 else "executed"
                 if run_diff["proven_same"] and reference_ok is not False
-                else "executed_with_findings"
-                if integrity_findings
                 else "unverifiable"
             ),
             "reason": integrity_reason,

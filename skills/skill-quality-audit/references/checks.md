@@ -76,7 +76,7 @@ Executadas por `python scripts/audit_skill.py audit --target <skill>`; cada resu
 - severidade padrão: critical
 - o que verifica: Falta name, description, version ou platforms no frontmatter.
 - como: _check_required_keys: compara as chaves lidas com a lista exigida pelo repositório.
-- limites: name e description ausentes são critical; version e platforms ausentes são high.
+- limites: O default é critical e vale para name e description; o emissor aplica high a version e platforms e registra a severidade efetiva com justificativa no próprio achado (severity_justification). A política é deliberada: sem name/description a skill não é descoberta, sem version/platforms o consumo fica indefinido.
 
 ### SQA-005 — O campo name do frontmatter não corresponde ao nome do diretório da skill.
 
@@ -148,7 +148,7 @@ Executadas por `python scripts/audit_skill.py audit --target <skill>`; cada resu
 - severidade padrão: high
 - o que verifica: Um link relativo ou um caminho citado na documentação não existe no alvo.
 - como: _check_references: resolve links markdown e caminhos entre crases contra o sistema de arquivos.
-- limites: Só verifica existência; não confere se o conteúdo referenciado diz o que a documentação afirma. Links em estilo de referência ([texto]: url) não são resolvidos: ficam para a leitura semântica.
+- limites: Só verifica existência; não confere se o conteúdo referenciado diz o que a documentação afirma. Links markdown e caminhos entre crases dentro de blocos cercados não são verificados: o bloco é lido como exemplo literal. Invocações em bloco cercado são tratadas por SQA-016 e SQA-017, não por esta verificação. Links em estilo de referência ([texto]: url) não são resolvidos: ficam para a leitura semântica.
 
 ### SQA-014 — A documentação cita caminho absoluto ou caminho que sai da raiz da skill.
 

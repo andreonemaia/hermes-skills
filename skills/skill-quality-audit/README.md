@@ -42,7 +42,9 @@ Não use para:
 - Python 3.11 ou superior.
 - `pyyaml` para leitura completa do frontmatter. Sem ele o script usa um parser
   restrito e registra SQA-027 para construções que não consegue decidir, em vez
-  de adivinhar.
+  de adivinhar. O fallback é do `--backend auto`; pedir `--backend pyyaml` sem a
+  dependência é erro de uso (saída 3), não defeito de frontmatter do alvo, e nada
+  é instalado automaticamente.
 - O alvo como diretório local. Nenhum acesso à rede é feito.
 
 Plataforma: desenvolvido e testado em Windows 11 com Python 3.14 e git-bash. A
@@ -69,8 +71,15 @@ python scripts/audit_skill.py audit --target ../minha-skill \
 ```
 
 `--fail-on` escolhe a severidade mínima que produz código de saída 1. O padrão é
-`high`; `never` mantém os achados no relatório e desliga o efeito no código de
-saída.
+`high`. `never` mantém todos os achados no relatório e impede que achados
+produzam saída 1, sem mexer no resto:
+
+- divergência de referência continua visível em `matches_reference: false` e no
+  achado crítico SQA-026, mesmo com saída 0;
+- mudança comprovada durante a execução continua saindo 5, com ou sem `never`,
+  porque 5 reporta falha de integridade, não achado;
+- comparação inconclusiva continua inconclusiva (`null`), nunca vira "igual" nem
+  "alterado".
 
 ## Como ler o relatório
 
@@ -164,7 +173,8 @@ Limites que valem para toda a versão:
 - somente leitura sobre o alvo, comprovado por manifesto de conteúdo antes e
   depois; isso cobre o diretório auditado, não efeitos externos;
 - o frontmatter é lido por `pyyaml` quando disponível e por um parser restrito
-  caso contrário, que declara o que não decide;
+  caso contrário, que declara o que não decide; sem PyYAML, `auto` cai para o
+  parser restrito e `--backend pyyaml` explícito sai 3 como erro de uso;
 - verificações de idioma e de alegação de capacidade são heurísticas e sempre
   `signal`;
 - os testes do alvo não são executados: a auditoria observa que `tests/` existe,

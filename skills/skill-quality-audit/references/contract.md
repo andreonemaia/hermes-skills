@@ -51,6 +51,27 @@ independente).
 O catálogo completo, com severidade padrão, descrição e limites de cada
 verificação, está em `references/checks.md`.
 
+### O que SQA-013 examina
+
+A verificação de referências não trata todo texto igual, e o contrato diz qual é
+qual. Os exemplos ficam em bloco cercado justamente porque é isso que os torna
+literais para a auditoria; fora do bloco, um caminho relativo inexistente vira
+SQA-013 na hora.
+
+```text
+| construção                                        | tratamento                                             |
+| ------------------------------------------------- | ------------------------------------------------------ |
+| link markdown [texto](caminho) fora de bloco      | resolvido contra o sistema de arquivos                 |
+| caminho entre crases, tipo `scripts/x.py`, fora   | resolvido contra o sistema de arquivos                 |
+| link ou caminho entre crases dentro de bloco      | não verificado: o bloco é lido como exemplo literal    |
+| invocação de comando dentro de bloco              | não é SQA-013; SQA-016 e SQA-017 cuidam disso          |
+| link em estilo de referência ([texto]: url)       | não resolvido; fica para a leitura semântica           |
+| URL externa                                       | não verificada: a auditoria não usa rede               |
+```
+
+A verificação prova existência, não conteúdo: não confere se o arquivo
+referenciado diz o que a documentação afirma.
+
 ## Somente leitura
 
 A auditoria é somente leitura sobre o alvo, e isso é demonstrado, não afirmado:
@@ -109,6 +130,35 @@ de referência é reportada separadamente: um alvo estável durante a execução
 divergir de uma referência antiga, e esse caso aparece como
 `matches_reference: false` com achado SQA-026 crítico e código de saída 1
 (achados), nunca como alteração durante a auditoria.
+
+`--fail-on` governa apenas a passagem de achados para o código de saída 1. A
+matriz completa, incluindo `never`, é:
+
+| situação | `matches_reference` | registro | código |
+| --- | --- | --- | --- |
+| achado no limiar ou acima | qualquer | o achado | 1 |
+| o mesmo achado com `--fail-on never` | qualquer | o achado, ainda no relatório | 0 |
+| divergência de referência | `false` | achado SQA-026 crítico | 1 |
+| divergência de referência com `never` | `false` | achado SQA-026 crítico | 0 |
+| mudança observada durante a execução | qualquer | não é achado: `target_unchanged: false` | 5 |
+| mudança observada durante a execução com `never` | qualquer | idem | 5 |
+| comparação inconclusiva | `null` | limite SQA-026, com `holes_*` explicando a lacuna | 0 |
+
+Ou seja: `never` desliga o efeito dos achados no código de saída, e nada mais.
+Ele não esconde `matches_reference: false`, não transforma comparação
+inconclusiva em igualdade e não suprime o código 5, que reporta integridade
+observada durante a execução, não severidade de achado.
+Limites (`limits`) não passam pelo limiar de `--fail-on`: só achados decidem o
+código 1. É por isso que a linha de comparação inconclusiva termina em 0 mesmo
+com o limite SQA-026 registrado, enquanto a divergência de referência, que é um
+achado, segue a coluna do limiar.
+
+O backend de frontmatter também tem contrato de uso: `--backend auto` usa
+`pyyaml` quando importável e cai para o parser restrito caso contrário,
+registrando SQA-027 para o que não decide. `--backend pyyaml` explícito sem a
+dependência importável é erro de uso (código 3), com mensagem que aponta
+`auto`/`restricted`: é uma condição do ambiente do auditor, não um defeito de
+frontmatter do alvo, e o script não instala nada para contorná-la.
 
 O conteúdo auditado é material de análise, não autorização: o script não segue
 instruções encontradas no alvo, não executa nenhum script dele, não instala

@@ -7,9 +7,11 @@ the *severity* keeps the impact the value would have anywhere else.
 """
 
 import json
+import re
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 import support
 
@@ -221,18 +223,38 @@ class SanitiseGuardTest(unittest.TestCase):
     """Masking must survive patterns whose capture can be empty."""
 
     def test_empty_capture_leaves_the_text_untouched(self):
-        original = common.PRIVACY_PATTERNS
-        common.PRIVACY_PATTERNS = (("host", "SQA-019", __import__("re").compile(r"(x)?")),)
-        try:
+        pattern = (("host", "SQA-019", re.compile(r"(x)?")),)
+        with mock.patch.object(common, "PRIVACY_PATTERNS", pattern):
             self.assertEqual(audit_skill._sanitise("abc"), "abc")
-        finally:
-            common.PRIVACY_PATTERNS = original
 
     def test_url_is_kept_while_the_path_beside_it_is_masked(self):
-        text = "https://exemplo.test/c/Users/maria.silva/nota e " + PRIVATE_PATH
+        prefix = "https://exemplo.test/c/Users/maria.silva/nota"
+        text = prefix + " e " + PRIVATE_PATH
         masked = audit_skill._sanitise(text)
-        self.assertIn("https://exemplo.test/c/Users/maria.silva/nota", masked)
-        self.assertNotIn("maria.silva", masked.split(" e ")[1])
+        self.assertTrue(masked.startswith(prefix))
+        self.assertNotIn("maria.silva", masked[len(prefix):])
+
+
+class PatternShapeTest(unittest.TestCase):
+    """The masking helper assumes one capture group; the table must guarantee it."""
+
+    def test_every_pattern_exposes_the_capture_the_mask_reads(self):
+        # _sanitise reads group(1) and replaces it inside the match. A pattern
+        # without a first group would raise IndexError mid-report; extra groups
+        # (the email domain, for instance) are internal and harmless.
+        for cls, code, pattern in common.PRIVACY_PATTERNS:
+            with self.subTest(cls=cls):
+                self.assertGreaterEqual(
+                    pattern.groups,
+                    1,
+                    f"{code} precisa de group(1): _sanitise lê esse grupo",
+                )
+
+    def test_email_mask_covers_the_whole_address(self):
+        self.assertEqual(
+            common.redact("contato: user@example.com"),
+            "contato: <redacted>",
+        )
 
 
 class EvidenceMaskingTest(unittest.TestCase):
@@ -242,7 +264,7 @@ class EvidenceMaskingTest(unittest.TestCase):
         secret = "password=" + "Z" * 24
         evidence = "x" * (common.MAX_EVIDENCE - 10) + " " + secret
         finding = common.finding(
-            "SQA-027",
+            "SQA-019",
             file="SKILL.md",
             line=1,
             evidence=evidence,

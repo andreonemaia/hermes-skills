@@ -157,8 +157,13 @@ class GeneratedDocumentTest(unittest.TestCase):
         with mock.patch.object(
             pathlib.Path, "read_bytes", side_effect=PermissionError("negado")
         ):
-            code = support.render_checks.main(["--check"])
+            err = io.StringIO()
+            with redirect_stderr(err):
+                code = support.render_checks.main(["--check"])
         self.assertEqual(code, 1)
+        diagnostic = err.getvalue()
+        self.assertIn("não foi possível ler", diagnostic)
+        self.assertNotIn("Traceback", diagnostic)
 
     def test_check_mode_compares_bytes_not_normalized_lines(self):
         # A CRLF copy renders the same lines; only a byte comparison catches

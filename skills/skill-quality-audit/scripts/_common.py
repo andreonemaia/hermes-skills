@@ -484,7 +484,8 @@ def walk_target(root: str, errors: list[dict] | None = None) -> list[dict]:
     """Every entry under ``root`` except the excluded noise, sorted by path.
 
     Symlinks are reported but never followed, so a link pointing outside the
-    target cannot pull foreign content into the audit.
+    target cannot pull foreign content into the audit. Windows directory
+    junctions are treated the same way and carry ``kind: "symlink"``.
 
     ``errors``, when given, receives one item per directory whose listing
     failed. A subtree that cannot be entered is a hole in the manifest, not an
@@ -969,12 +970,24 @@ def read_frontmatter(text: str, backend: str = "auto") -> dict:
     """Read the frontmatter with a declared backend.
 
     ``pyyaml`` is used when it is importable and the caller allows it, which
-    makes the reading a full YAML parse. The fallback is a deliberately
+    makes the reading a full YAML parse. Asking for ``pyyaml`` explicitly when
+    it is not importable raises ``UsageError``: that is a problem of the
+    auditor's environment, not of the target, and it is never fixed by
+    installing anything on the fly. The fallback is a deliberately
     restricted reader: it handles the flat keys and the shallow nesting this
     contract needs and records every construct it does not decide as an
     unsupported item (``SQA-027``) instead of guessing a value. Its output is
     therefore never presented as complete YAML validation.
     """
+    if backend == "pyyaml" and not _pyyaml_available():
+        # An explicitly requested backend that is not installed is a problem of
+        # the auditor's environment, not a defect of the target: say so as usage
+        # (exit 3) instead of blaming a frontmatter that was never parsed. The
+        # ``auto`` backend keeps its documented fallback; nothing is installed.
+        raise UsageError(
+            "backend 'pyyaml' solicitado, mas PyYAML não está disponível; "
+            "use --backend auto (fallback para restricted) ou --backend restricted"
+        )
     raw, body, status, reason = split_frontmatter(text)
     result = {
         "status": status,
@@ -1092,50 +1105,49 @@ def _parse_restricted(raw: str) -> dict:
             # below is what tells the caller the parsed mapping cannot be
             # trusted for this key, so the loss is declared, not silent.
             unsupported.append({"line": line_no, "construct": "duplicate_key", "key": key})
-        seen.add(marker)
+
+        def register(value_):
+            # The marker is consumed only when the key actually entered the
+            # tree: a line rejected for indentation must not shadow a later
+            # valid line that repeats the same key.
+            if _register(
+                data, stack, indent, key, value_, unsupported, line_no, child_indents
+            ):
+                seen.add(marker)
 
         if value[:1] in ("|", ">"):
             unsupported.append(
                 {"line": line_no, "construct": "block_scalar", "key": key}
             )
-            _register(data, stack, indent, key, None, unsupported, line_no, child_indents)
+            register(None)
             continue
         for token, construct in _UNSUPPORTED_TOKENS:
             if value.startswith(token):
                 unsupported.append(
                     {"line": line_no, "construct": construct, "key": key}
                 )
-                _register(data, stack, indent, key, None, unsupported, line_no, child_indents)
+                register(None)
                 break
         else:
             if value == "":
-                _register(data, stack, indent, key, {}, unsupported, line_no, child_indents)
+                register({})
             elif value.startswith("["):
                 items, closed = _split_flow_items(value)
                 if not closed:
                     unsupported.append(
                         {"line": line_no, "construct": "malformed_flow", "key": key}
                     )
-                    _register(data, stack, indent, key, None, unsupported, line_no, child_indents)
+                    register(None)
                 elif any(item[:1] in ("[", "{") for item in items):
                     # Nested flow collections are outside the restricted grammar.
                     unsupported.append(
                         {"line": line_no, "construct": "flow_nesting", "key": key}
                     )
-                    _register(data, stack, indent, key, None, unsupported, line_no, child_indents)
+                    register(None)
                 else:
-                    _register(
-                        data,
-                        stack,
-                        indent,
-                        key,
-                        [_unquote(item) for item in items if item.strip()],
-                        unsupported,
-                        line_no,
-                        child_indents,
-                    )
+                    register([_unquote(item) for item in items if item.strip()])
             else:
-                _register(data, stack, indent, key, _unquote(value), unsupported, line_no, child_indents)
+                register(_unquote(value))
 
     return {
         "data": data,
@@ -1231,7 +1243,8 @@ def _register(
     unsupported: list | None = None,
     line_no: int | None = None,
     child_indents: dict | None = None,
-) -> None:
+) -> bool:
+    """Attach one parsed key to the tree; False when the line was rejected."""
     while stack and stack[-1][0] >= indent:
         stack.pop()
     if stack and child_indents is not None:
@@ -1244,7 +1257,7 @@ def _register(
                 unsupported.append(
                     {"line": line_no, "construct": "invalid_indentation", "key": key}
                 )
-            return
+            return False
         child_indents[parent_path] = indent
     if not stack:
         if indent > 0:
@@ -1254,27 +1267,31 @@ def _register(
                 unsupported.append(
                     {"line": line_no, "construct": "invalid_indentation", "key": key}
                 )
-            return
+            return False
         data[key] = value
         if isinstance(value, dict):
             stack.append((indent, key))
-        return
+        return True
     if len(stack) >= 3:
         # Deeper than the contract needs: keep the parent as a dict and record
         # the construct so the report can say the read was partial.
         parent = _container(data, stack)
         if isinstance(parent, dict):
+            # The key does enter the tree here (as an opaque value), so it
+            # still counts for duplicate detection.
             parent.setdefault(key, None)
         if unsupported is not None:
             unsupported.append(
                 {"line": line_no, "construct": "deep_nesting", "key": key}
             )
-        return
+        return isinstance(parent, dict)
     parent = _container(data, stack)
     if isinstance(parent, dict):
         parent[key] = value
         if isinstance(value, dict):
             stack.append((indent, key))
+        return True
+    return False
 
 
 def _container(data: dict, stack: list):

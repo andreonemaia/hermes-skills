@@ -9,11 +9,11 @@ justificada e em que estado de validação.
 | campo | tipo | sempre presente | significado |
 | --- | --- | --- | --- |
 | `id` | texto | sim | código da verificação que produziu o achado (por exemplo `SQA-013`) |
-| `check` | texto | sim | título da verificação, para leitura humana |
+| `check` | texto | sim | título exato da verificação no catálogo (`references/checks.md`), não uma descrição livre |
 | `category` | texto | sim | categoria da verificação, uma das emitidas pelo catálogo: `claims`, `consistency`, `documentation`, `integrity`, `metadata`, `privacy`, `references`, `semantic`, `structure`, `tests` |
 | `method` | texto | sim | `structural` (executada pelo script) ou `semantic` (julgada pelo agente) |
 | `severity` | texto | sim | `info`, `low`, `medium`, `high` ou `critical` |
-| `severity_justification` | texto | sim | por que esta severidade, e não a padrão da verificação |
+| `severity_justification` | texto | sim | por que esta severidade foi escolhida, inclusive quando ela é a padrão da verificação (o campo registra a razão, não necessariamente um desvio) |
 | `file` | texto | sim | caminho relativo ao alvo |
 | `line` | número ou nulo | sim | linha, quando a evidência tem localização pontual |
 | `location` | texto | sim | `arquivo:linha` ou só o arquivo |

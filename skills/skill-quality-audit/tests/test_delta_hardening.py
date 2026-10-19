@@ -979,6 +979,31 @@ class RestrictedParserDuplicateTest(unittest.TestCase):
             "duplicate_key", [item["construct"] for item in parsed["unsupported"]]
         )
 
+    def test_a_rejected_line_does_not_shadow_a_later_valid_key(self):
+        # The indented root line is dropped, so ``name`` never entered the tree.
+        # Consuming its marker anyway would report the valid line below as a
+        # duplicate and lose a key the document does declare.
+        parsed = common.read_frontmatter(
+            "---\n  name: rejeitado\nname: aceito\n---\n", backend="restricted"
+        )
+        self.assertEqual(parsed["status"], "ok")
+        self.assertEqual(parsed["data"]["name"], "aceito")
+        self.assertNotIn(
+            "duplicate_key", [item["construct"] for item in parsed["unsupported"]]
+        )
+
+    def test_a_rejected_line_does_not_hide_a_later_duplicate(self):
+        # Rejected line, then two accepted occurrences: the duplicate is still
+        # a duplicate, so the real detection survives the fix above.
+        parsed = common.read_frontmatter(
+            "---\n  version: rejeitado\nversion: 1\nversion: 2\n---\n",
+            backend="restricted",
+        )
+        self.assertIn(
+            "duplicate_key", [item["construct"] for item in parsed["unsupported"]]
+        )
+        self.assertEqual(parsed["data"]["version"], "2")
+
 
 class RestrictedFlowTest(unittest.TestCase):
     """Inline lists split on commas outside quotes only."""
