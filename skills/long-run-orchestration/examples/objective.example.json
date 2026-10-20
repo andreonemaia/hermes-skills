@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "objective_id": "example-refactor-cli",
+  "title": "Refatorar o parser da CLI",
+  "goal": "Separar parsing de validação no parser da CLI, preservar o comportamento observável e provar a equivalência com testes.",
+  "executor": {
+    "profile": "your-profile",
+    "model": "executor-model-placeholder",
+    "provider": "your-provider"
+  },
+  "workspace": {
+    "kind": "scratch"
+  },
+  "limits": {
+    "max_runtime": "2h",
+    "max_retries": 2,
+    "max_turns": 12,
+    "stall_ticks": 2,
+    "stall_alert_ticks": 3,
+    "heartbeat_ttl_seconds": 900
+  },
+  "review": {
+    "enabled": true,
+    "profile": "your-profile",
+    "model": "reviewer-model-placeholder",
+    "provider": "your-provider"
+  },
+  "artifacts_dir": "artifacts",
+  "steps": [
+    {
+      "id": "spec",
+      "kind": "spec",
+      "title": "Congelar o contrato",
+      "body": "Objetivo: refatorar o parser sem alterar o comportamento. Congele este contrato e prepare o grafo."
+    },
+    {
+      "id": "implement",
+      "kind": "work",
+      "title": "Separar parsing de validação",
+      "body": "Extraia a validação do parser para uma função pura, mantenha as mensagens de erro e registre os arquivos alterados.",
+      "acceptance": [
+        {
+          "id": "separated",
+          "criterion": "Parsing e validação são funções distintas, sem mudança de assinatura pública.",
+          "evidence": "proof"
+        },
+        {
+          "id": "tests",
+          "criterion": "Os testes existentes passam sem alteração.",
+          "evidence": "command"
+        }
+      ],
+      "evidence_required": [
+        "changed_files",
+        "tests_run",
+        "artifacts"
+      ]
+    },
+    {
+      "id": "tests",
+      "kind": "work",
+      "title": "Cobrir os casos de borda",
+      "body": "Adicione testes para argumentos ausentes, inválidos e repetidos. Rode a suíte completa e registre a contagem.",
+      "acceptance": [
+        {
+          "id": "coverage",
+          "criterion": "Cada caso de borda tem um teste que falha se a validação for removida.",
+          "evidence": "command"
+        }
+      ],
+      "evidence_required": [
+        "changed_files",
+        "tests_run",
+        "artifacts"
+      ]
+    },
+    {
+      "id": "review",
+      "kind": "review",
+      "title": "Revisão independente",
+      "body": "Revise o diff com contexto separado. Registre verdict, reviewer_model e findings. Não edite o código revisado.",
+      "acceptance": [
+        {
+          "id": "independent",
+          "criterion": "A revisão usa um modelo diferente do executor e cobre o diff completo.",
+          "evidence": "artifact"
+        }
+      ],
+      "evidence_required": [
+        "artifacts",
+        "notes"
+      ],
+      "depends_on": [
+        "implement",
+        "tests"
+      ]
+    },
+    {
+      "id": "consolidate",
+      "kind": "consolidate",
+      "title": "Consolidar e publicar",
+      "body": "Aplique apenas os achados confirmados, rode a suíte e publique o PR de rascunho. Registre a URL em published_pr.",
+      "acceptance": [
+        {
+          "id": "green",
+          "criterion": "A suíte completa passa após as correções.",
+          "evidence": "command"
+        },
+        {
+          "id": "pr",
+          "criterion": "O PR de rascunho existe e aponta para o commit verificado.",
+          "evidence": "proof"
+        }
+      ],
+      "evidence_required": [
+        "artifacts",
+        "tests_run",
+        "pr_url"
+      ],
+      "depends_on": [
+        "review"
+      ]
+    },
+    {
+      "id": "approval",
+      "kind": "approval",
+      "title": "Aprovação humana",
+      "body": "Uma pessoa revisa o PR e conclui este cartão manualmente. Nenhum agente deve concluí-lo.",
+      "depends_on": [
+        "consolidate"
+      ]
+    }
+  ]
+}
